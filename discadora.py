@@ -1,4 +1,4 @@
-"""Discadora progressiva v2: le a fila do banco e aplica as regras de rediscagem."""
+"""Discadora progressiva v3: fila do banco, rediscagem e reserva de canais por tronco."""
 import argparse, asyncio, json, time, uuid
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -11,17 +11,17 @@ ARI = "http://127.0.0.1:8088/ari"
 USUARIO = "discadora"
 SENHA = (Path.home() / "lab" / "ari_senha.txt").read_text().strip()
 APP = "discadora"
-TRONCO = "tronco_operadora"
 BINA = "4130000000"
 TEMPO_TOQUE = 25
 PAUSA_POS_CHAMADA = 5
-FILA_MINIMA = 50                      # base propria: abaixo disso, sorteia novo lote
+FILA_MINIMA = 50
 TAMANHO_LOTE = 5000
-LIMITE_ERROS_TECNICOS = 5             # teto de tentativas que nao contam
+LIMITE_ERROS_TECNICOS = 5
 IGNORAR = {"ChannelVarset", "ChannelDialplan"}
 
 operadores, chamadas, campanha = {}, {}, {}
 http = db = args = None
+ultimo_aviso_sem_canal = 0.0
 
 
 def agora():
@@ -52,7 +52,6 @@ def pode_discar():
 
 
 async def proximo_contato():
-    # reserva o proximo contato numa operacao so (seguro com varias discadoras)
     async with db.cursor(row_factory=dict_row) as cur:
         await cur.execute("""
             UPDATE campanha_contatos SET status = 'discando', atualizado_em = now()
@@ -65,32 +64,53 @@ async def proximo_contato():
         return await cur.fetchone()
 
 
+async def liberar_canal(cli_id):
+    await db.execute("DELETE FROM canais_em_uso WHERE canal = %s", (cli_id,))
+
+
 async def discar_para_livres():
+    global ultimo_aviso_sem_canal
     if not pode_discar():
         return
     for op_id, op in list(operadores.items()):
         if not op["livre"]:
             continue
         op["livre"] = False
+        cli_id = f"cli-{uuid.uuid4().hex[:12]}"
+
+        # 1) pede um canal ao banco (troncos, travas diarias e limite da empresa)
+        async with db.cursor() as cur:
+            await cur.execute("SELECT reservar_canal(%s, 'call', %s)", (cli_id, args.campanha))
+            tronco_id = (await cur.fetchone())[0]
+        if tronco_id is None:
+            op["livre"] = True
+            if time.time() - ultimo_aviso_sem_canal > 30:
+                ultimo_aviso_sem_canal = time.time()
+                print(f"{agora()}  sem canal disponivel (troncos cheios, inativos ou limite diario)")
+            return
+
+        # 2) pega o proximo contato da fila
         contato = await proximo_contato()
-        if contato is None:                       # nada disponivel agora
+        if contato is None:
+            await liberar_canal(cli_id)
             op["livre"] = True
             return
-        cli_id = f"cli-{uuid.uuid4().hex[:12]}"
+
         numero = contato["telefone"]
         async with db.cursor() as cur:
-            await cur.execute("""INSERT INTO tentativas
-                                   (campanha_id, campanha_contato_id, telefone, canal, operador)
-                                 VALUES (%s, %s, %s, %s, %s) RETURNING id""",
-                              (args.campanha, contato["id"], numero, cli_id, op["ramal"]))
+            await cur.execute("SELECT nome, endpoint FROM troncos WHERE id = %s", (tronco_id,))
+            nome_tronco, modelo = await cur.fetchone()
+            await cur.execute("""INSERT INTO tentativas (campanha_id, campanha_contato_id, telefone,
+                                                         canal, operador, tronco_id)
+                                 VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
+                              (args.campanha, contato["id"], numero, cli_id, op["ramal"], tronco_id))
             tentativa_id = (await cur.fetchone())[0]
         chamadas[cli_id] = {"contato": contato, "tentativa_id": tentativa_id,
                             "numero": numero, "operador": op_id, "ponte": None}
-        endpoint = f"PJSIP/{numero}" if args.lab else f"PJSIP/{numero}@{TRONCO}"
-        print(f"{agora()}  discando {numero} (ja teve {contato['tentativas']} tentativa(s)) "
-              f"para {op['nome']}")
+        print(f"{agora()}  discando {numero} pelo tronco {nome_tronco} "
+              f"(ja teve {contato['tentativas']} tentativa(s)) para o operador {op['ramal']}")
         r = await http.post(f"{ARI}/channels", params={
-            "endpoint": endpoint, "app": APP, "appArgs": "cliente",
+            "endpoint": modelo.replace("{numero}", numero), "app": APP, "appArgs": "cliente",
             "channelId": cli_id, "callerId": BINA, "timeout": TEMPO_TOQUE})
         if r.status_code >= 400:
             await finalizar(cli_id, "erro_originacao", None,
@@ -102,7 +122,8 @@ async def discar_para_livres():
 async def finalizar(cli_id, resultado, causa_codigo, causa_texto):
     c = chamadas.pop(cli_id, None)
     if c is None:
-        return                                    # ja finalizada
+        return
+    await liberar_canal(cli_id)                   # devolve o canal ao placar
     if c.get("ponte"):
         await http.delete(f"{ARI}/bridges/{c['ponte']}")
     conversa = round(time.time() - c["atendida_em"]) if c.get("atendida_em") else None
@@ -135,7 +156,6 @@ async def finalizar(cli_id, resultado, causa_codigo, causa_texto):
                                  atualizado_em = now()
                              WHERE id = %s""",
                           (status, contadas, motivo, regra["intervalo"], contato["id"]))
-        # atendeu num telefone: encerra os outros telefones do mesmo contato
         if resultado == "atendida" and contato["lista_contato_id"]:
             await cur.execute("""UPDATE campanha_contatos
                                  SET status = 'finalizado', atualizado_em = now(),
@@ -188,8 +208,6 @@ async def repor_lote():
 
 
 async def relogio():
-    # a cada 5 s: recarrega a campanha (pausa, janela) e tenta discar;
-    # a cada 60 s: verifica se precisa de novo lote
     ultimo_lote = 0
     while True:
         await asyncio.sleep(5)
@@ -211,11 +229,15 @@ async def tratar(ev):
         papel = (ev.get("args") or [""])[0]
         if papel == "operador":
             await http.post(f"{ARI}/channels/{cid}/answer")
-            operadores[cid] = {"nome": canal["name"], "ramal": canal["caller"]["number"], "livre": True}
-            print(f"{agora()}  operador {canal['name']} entrou e esta disponivel")
+            ramal = canal["caller"]["number"]
+            operadores[cid] = {"nome": canal["name"], "ramal": ramal, "livre": True}
+            await db.execute("""INSERT INTO operadores_online (canal, ramal, campanha_id)
+                                VALUES (%s, %s, %s) ON CONFLICT DO NOTHING""",
+                             (cid, ramal, args.campanha))
+            print(f"{agora()}  operador {ramal} entrou e esta disponivel")
         elif papel == "cliente" and cid in chamadas:
             c = chamadas[cid]
-            if c["operador"] not in operadores:          # operador saiu: abandono
+            if c["operador"] not in operadores:
                 c["resultado_forcado"] = "abandono"
                 await http.delete(f"{ARI}/channels/{cid}")
             else:
@@ -234,8 +256,9 @@ async def tratar(ev):
         if cid in chamadas:
             await finalizar(cid, chamadas[cid].get("resultado_forcado", "atendida"), None, None)
         elif cid in operadores:
-            operadores.pop(cid)
-            print(f"{agora()}  operador {canal['name']} saiu")
+            op = operadores.pop(cid)
+            await db.execute("DELETE FROM operadores_online WHERE canal = %s", (cid,))
+            print(f"{agora()}  operador {op['ramal']} saiu")
             for cli_id, c in list(chamadas.items()):
                 if c["operador"] == cid and c.get("ponte"):
                     c["resultado_forcado"] = "operador_desligou"
@@ -254,18 +277,32 @@ async def tratar(ev):
 
 async def main():
     global http, db, args
-    p = argparse.ArgumentParser(description="Discadora progressiva v2")
+    p = argparse.ArgumentParser(description="Discadora progressiva v3")
     p.add_argument("--campanha", type=int, required=True)
-    p.add_argument("--lab", action="store_true", help="disca para ramais em vez do tronco")
     args = p.parse_args()
 
     db = await psycopg.AsyncConnection.connect("dbname=discadora", autocommit=True)
     await carregar_campanha()
     if campanha is None:
         raise SystemExit(f"Campanha {args.campanha} nao existe")
-    # recuperacao: contatos presos em 'discando' (queda do programa) voltam para a fila
+    if campanha["tipo"] != "call":
+        raise SystemExit(f"A campanha {args.campanha} e do tipo '{campanha['tipo']}', nao 'call'")
+
+    # seguranca: telefones reais + so troncos de laboratorio = nao inicia
+    async with db.cursor() as cur:
+        await cur.execute("SELECT bool_and(position('@' in endpoint) = 0) FROM troncos WHERE ativo")
+        so_lab = (await cur.fetchone())[0]
+        await cur.execute("""SELECT bool_or(length(telefone) >= 10) FROM campanha_contatos
+                             WHERE campanha_id = %s AND status <> 'finalizado'""", (args.campanha,))
+        tem_reais = (await cur.fetchone())[0]
+    if so_lab and tem_reais:
+        raise SystemExit("A campanha tem telefones reais, mas so ha troncos de laboratorio ativos.")
+
+    # recuperacao de queda: contatos presos, canais e operadores que ficaram no placar
     await db.execute("""UPDATE campanha_contatos SET status = 'pendente'
                         WHERE campanha_id = %s AND status = 'discando'""", (args.campanha,))
+    await db.execute("DELETE FROM canais_em_uso WHERE tipo = 'call'")
+    await db.execute("DELETE FROM operadores_online")
     await db.execute("UPDATE campanhas SET status = 'ativa' WHERE id = %s AND status = 'rascunho'",
                      (args.campanha,))
     await carregar_campanha()
@@ -273,11 +310,6 @@ async def main():
     url = f"ws://127.0.0.1:8088/ari/events?app={APP}&api_key={USUARIO}:{SENHA}"
     async with httpx.AsyncClient(auth=(USUARIO, SENHA), timeout=10) as cliente_http:
         http = cliente_http
-        if not args.lab:      # seguranca: sem tronco configurado, nao disca
-            r = await http.get(f"{ARI}/endpoints/PJSIP/{TRONCO}")
-            if r.status_code == 404:
-                raise SystemExit(f"Tronco '{TRONCO}' nao existe no Asterisk. "
-                                 "Use --lab para testar com ramais.")
         async with websockets.connect(url) as ws:
             print(f"Discadora no ar | campanha {campanha['id']} '{campanha['nome']}' | "
                   f"janela {campanha['janela_inicio']}-{campanha['janela_fim']} | "
