@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block titulo %}Início{% endblock %}
+{% block conteudo %}
+<h2>Olá, {{ usuario.nome }}</h2>
+<div class="grade">
+  {% for chave, titulo, url in usuario.modulos %}<a href="{{ url }}">{{ titulo }}</a>{% endfor %}
+</div>
+{% endblock %}

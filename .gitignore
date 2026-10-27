@@ -12,3 +12,5 @@ exportacoes/
 *.wav
 *.mp3
 *.zip
+painel_segredo.txt
+certs/
