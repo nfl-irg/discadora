@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block titulo %}Áudios{% endblock %}
+{% block conteudo %}
+<style>
+  form.filtros { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+                 gap: 10px; align-items: end; }
+  form.filtros label { display: flex; flex-direction: column; gap: 4px; font-size: .85em; color: #555; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 8px 10px; border-bottom: 1px solid var(--borda); text-align: left; }
+  th { background: #f0f1f6; font-size: .85em; color: #444; }
+  audio { height: 32px; width: 240px; vertical-align: middle; }
+  .paginas { display: flex; gap: 16px; align-items: center; margin-top: 12px; }
+</style>
+
+<div class="cartao">
+  <h2>Áudios</h2>
+  <form class="filtros" method="get">
+    <label>Telefone <input name="telefone" value="{{ f.telefone }}" placeholder="41999999999"></label>
+    <label>Campanha
+      <select name="campanha">
+        <option value="">Todas</option>
+        {% for c in campanhas %}
+        <option value="{{ c.id }}" {% if f.campanha == c.id|string %}selected{% endif %}>{{ c.id }} · {{ c.nome }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Operador (ramal) <input name="operador" value="{{ f.operador }}" placeholder="7001"></label>
+    <label>Conversa mínima (s) <input name="min_seg" type="number" min="0" value="{{ f.min_seg }}" placeholder="60"></label>
+    <label>De <input name="de" type="date" value="{{ f.de }}"></label>
+    <label>Até <input name="ate" type="date" value="{{ f.ate }}"></label>
+    <button type="submit">Filtrar</button>
+  </form>
+  {% if filtrou %}<p class="discreto"><a href="/audios">Limpar filtros</a></p>{% endif %}
+</div>
+
+<div class="cartao">
+  {% if resultados %}
+  <p class="discreto">
+    {% if filtrou %}Chamadas com os filtros aplicados{% else %}Todas as chamadas atendidas{% endif %},
+    da mais recente para a mais antiga · página {{ pagina }}
+  </p>
+  <table>
+    <tr><th>Data e hora</th><th>Campanha</th><th>Operador</th><th>Telefone</th><th>Conversa</th><th>Áudio</th></tr>
+    {% for r in resultados %}
+    <tr>
+      <td>{{ r.inicio.strftime('%d/%m/%Y %H:%M') }}</td>
+      <td>{{ r.campanha }}</td>
+      <td>{{ r.operador or '—' }}</td>
+      <td>{{ r.telefone }}</td>
+      <td>{{ r.conversa_s or 0 }} s</td>
+      <td>
+        {% if r.tem_audio %}
+          <audio controls preload="none" src="/audios/arquivo/{{ r.id }}"></audio>
+          <a href="/audios/arquivo/{{ r.id }}?baixar=1">Baixar</a>
+        {% else %}<span class="discreto">sem gravação</span>{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  <div class="paginas">
+    {% if anterior %}<a href="/audios?{{ anterior }}">← Mais recentes</a>{% endif %}
+    {% if proxima %}<a href="/audios?{{ proxima }}">Mais antigas →</a>{% endif %}
+  </div>
+  {% else %}
+  <p>Nenhuma chamada atendida{% if filtrou %} com esses filtros{% endif %}.</p>
+  {% endif %}
+</div>
+{% endblock %}

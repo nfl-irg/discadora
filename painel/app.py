@@ -127,6 +127,84 @@ def inicio(request: Request):
     return templates.TemplateResponse(request, "inicio.html", {"usuario": u})
 
 
+# ------------------------------ audios ------------------------------
+import re, sys
+from urllib.parse import urlencode
+from fastapi.responses import FileResponse
+sys.path.insert(0, str(BASE.parent))
+from importar_lista import normalizar_telefone
+
+PASTA_GRAVACOES = Path("/var/spool/asterisk/recording")
+
+
+@app.get("/audios", response_class=HTMLResponse)
+def audios(request: Request, telefone: str = "", campanha: str = "", operador: str = "",
+           min_seg: str = "", de: str = "", ate: str = "", pagina: int = 1):
+    u = usuario_atual(request, "audios")
+    f = {"telefone": telefone, "campanha": campanha, "operador": operador,
+         "min_seg": min_seg, "de": de, "ate": ate}
+    usados = {k: v for k, v in f.items() if v}            # so os filtros preenchidos
+    pagina = max(pagina, 1)
+    por_pagina = 50
+    # telefone em qualquer formato; no laboratorio, aceita ramais (so digitos)
+    tel = (normalizar_telefone(telefone) or re.sub(r"\D", "", telefone)) if telefone else None
+    with db() as conn:
+        campanhas = conn.execute("""SELECT id, nome FROM campanhas
+                                    WHERE tipo = 'call' ORDER BY id DESC""").fetchall()
+        resultados = conn.execute("""
+            SELECT t.id, t.inicio, t.operador, t.telefone, t.conversa_s, t.canal,
+                   c.nome AS campanha
+            FROM tentativas t JOIN campanhas c ON c.id = t.campanha_id
+            WHERE t.atendida_em IS NOT NULL
+              AND c.tipo = 'call'
+              AND (%(tel)s::text  IS NULL OR t.telefone = %(tel)s)
+              AND (%(camp)s::int  IS NULL OR t.campanha_id = %(camp)s)
+              AND (%(op)s::text   IS NULL OR t.operador = %(op)s)
+              AND coalesce(t.conversa_s, 0) >= %(min)s
+              AND (%(de)s::date  IS NULL OR t.inicio >= %(de)s::date)
+              AND (%(ate)s::date IS NULL OR t.inicio < %(ate)s::date + 1)
+            ORDER BY t.inicio DESC
+            LIMIT %(lim)s OFFSET %(off)s""",
+            {"tel": tel, "camp": int(campanha) if campanha else None,
+             "op": operador or None, "min": int(min_seg) if min_seg else 0,
+             "de": de or None, "ate": ate or None,
+             "lim": por_pagina + 1, "off": (pagina - 1) * por_pagina}).fetchall()
+    tem_proxima = len(resultados) > por_pagina          # pediu 1 a mais para saber se ha outra pagina
+    resultados = resultados[:por_pagina]
+    for r in resultados:
+        r["tem_audio"] = (PASTA_GRAVACOES / f"{r['canal']}.wav").exists()
+    auditar(u["id"], "audio_busca", request, pagina=pagina, **usados)
+    anterior = urlencode({**usados, "pagina": pagina - 1}) if pagina > 1 else None
+    proxima = urlencode({**usados, "pagina": pagina + 1}) if tem_proxima else None
+    return templates.TemplateResponse(request, "audios.html",
+                                      {"usuario": u, "f": f, "filtrou": bool(usados),
+                                       "campanhas": campanhas, "resultados": resultados,
+                                       "pagina": pagina, "anterior": anterior,
+                                       "proxima": proxima})
+
+
+@app.get("/audios/arquivo/{tentativa_id}")
+def audio_arquivo(request: Request, tentativa_id: int, baixar: int = 0):
+    u = usuario_atual(request, "audios")
+    with db() as conn:
+        t = conn.execute("""SELECT canal, telefone, inicio, operador, conversa_s FROM tentativas
+                            WHERE id = %s AND atendida_em IS NOT NULL""",
+                         (tentativa_id,)).fetchone()
+    if not t:
+        raise HTTPException(status_code=404)
+    arquivo = PASTA_GRAVACOES / f"{t['canal']}.wav"
+    if not arquivo.exists():
+        raise HTTPException(status_code=404)
+    # o player pede o audio em pedacos: registra so o primeiro pedido
+    faixa = request.headers.get("range", "")
+    if baixar or faixa in ("", "bytes=0-"):
+        auditar(u["id"], "audio_baixar" if baixar else "audio_ouvir", request,
+                tentativa_id=tentativa_id, telefone=t["telefone"])
+    nome = (f"{t['telefone']}_{t['inicio']:%Y%m%d_%H%M%S}_"
+            f"op{t['operador'] or 'ura'}_{t['conversa_s'] or 0}s.wav")
+    return FileResponse(arquivo, media_type="audio/wav", filename=nome if baixar else None)
+
+
 # modulos ainda nao construidos: so verifica a permissao e mostra "em construcao"
 @app.get("/{modulo}", response_class=HTMLResponse)
 def em_construcao(request: Request, modulo: str):
