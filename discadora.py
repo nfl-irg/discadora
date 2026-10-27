@@ -53,14 +53,7 @@ def pode_discar():
 
 async def proximo_contato():
     async with db.cursor(row_factory=dict_row) as cur:
-        await cur.execute("""
-            UPDATE campanha_contatos SET status = 'discando', atualizado_em = now()
-            WHERE id = (SELECT id FROM campanha_contatos
-                        WHERE campanha_id = %s AND status = 'pendente'
-                          AND proxima_tentativa <= now()
-                        ORDER BY proxima_tentativa, id
-                        LIMIT 1 FOR UPDATE SKIP LOCKED)
-            RETURNING id, telefone, tentativas, lista_contato_id""", (args.campanha,))
+        await cur.execute("SELECT * FROM pegar_contato(%s)", (args.campanha,))
         return await cur.fetchone()
 
 
@@ -212,6 +205,10 @@ async def relogio():
     while True:
         await asyncio.sleep(5)
         await carregar_campanha()
+        if operadores:            # sinal de vida dos operadores logados
+            await db.execute("UPDATE operadores_online SET visto_em = now() WHERE canal = ANY(%s)", (list(operadores),))
+        if operadores:            # sinal de vida dos operadores logados
+            await db.execute("UPDATE operadores_online SET visto_em = now() WHERE canal = ANY(%s)", (list(operadores),))
         await discar_para_livres()
         if time.time() - ultimo_lote > 60:
             ultimo_lote = time.time()
