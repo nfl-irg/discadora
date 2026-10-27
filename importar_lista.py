@@ -84,9 +84,13 @@ def main():
 
     # 2) consulta blocklist e apelidos de cidade no seu banco
     with psycopg.connect(DSN_MAILING) as m, m.cursor() as cur:
-        cur.execute("SELECT telefone_norm FROM d_blocklist WHERE telefone_norm = ANY(%s)",
-                    (list(vistos),))
+        cur.execute("""SELECT telefone_norm FROM d_blocklist
+                       WHERE COALESCE(tipo, 'numero') = 'numero'
+                         AND telefone_norm = ANY(%s)""", (list(vistos),))
         bloqueados = {r[0] for r in cur.fetchall()}
+        cur.execute("SELECT telefone_norm FROM d_blocklist WHERE tipo = 'prefixo'")
+        prefixos = tuple(r[0] for r in cur.fetchall())
+        bloqueados |= {t for t in vistos if t.startswith(prefixos)}
         cur.execute("SELECT cidade_errada, cidade_correta FROM d_cidade_alias")
         apelidos = dict(cur.fetchall())
 
