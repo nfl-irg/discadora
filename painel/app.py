@@ -151,15 +151,18 @@ def audios(request: Request, telefone: str = "", campanha: str = "", operador: s
     with db() as conn:
         campanhas = conn.execute("""SELECT id, nome FROM campanhas
                                     WHERE tipo = 'call' ORDER BY id DESC""").fetchall()
+        operadores = conn.execute("""SELECT login, nome FROM usuarios
+                                     WHERE perfil = 'operador' ORDER BY login""").fetchall()
         resultados = conn.execute("""
-            SELECT t.id, t.inicio, t.operador, t.telefone, t.conversa_s, t.canal,
+            SELECT t.id, t.inicio, coalesce(t.operador_login, t.operador) AS operador,
+                   t.telefone, t.conversa_s, t.canal,
                    c.nome AS campanha
             FROM tentativas t JOIN campanhas c ON c.id = t.campanha_id
             WHERE t.atendida_em IS NOT NULL
               AND c.tipo = 'call'
               AND (%(tel)s::text  IS NULL OR t.telefone = %(tel)s)
               AND (%(camp)s::int  IS NULL OR t.campanha_id = %(camp)s)
-              AND (%(op)s::text   IS NULL OR t.operador = %(op)s)
+              AND (%(op)s::text   IS NULL OR t.operador_login = %(op)s)
               AND coalesce(t.conversa_s, 0) >= %(min)s
               AND (%(de)s::date  IS NULL OR t.inicio >= %(de)s::date)
               AND (%(ate)s::date IS NULL OR t.inicio < %(ate)s::date + 1)
@@ -178,7 +181,7 @@ def audios(request: Request, telefone: str = "", campanha: str = "", operador: s
     proxima = urlencode({**usados, "pagina": pagina + 1}) if tem_proxima else None
     return templates.TemplateResponse(request, "audios.html",
                                       {"usuario": u, "f": f, "filtrou": bool(usados),
-                                       "campanhas": campanhas, "resultados": resultados,
+                                       "campanhas": campanhas, "operadores": operadores, "resultados": resultados,
                                        "pagina": pagina, "anterior": anterior,
                                        "proxima": proxima})
 
@@ -187,7 +190,7 @@ def audios(request: Request, telefone: str = "", campanha: str = "", operador: s
 def audio_arquivo(request: Request, tentativa_id: int, baixar: int = 0):
     u = usuario_atual(request, "audios")
     with db() as conn:
-        t = conn.execute("""SELECT canal, telefone, inicio, operador, conversa_s FROM tentativas
+        t = conn.execute("""SELECT canal, telefone, inicio, coalesce(operador_login, operador) AS operador, conversa_s FROM tentativas
                             WHERE id = %s AND atendida_em IS NOT NULL""",
                          (tentativa_id,)).fetchone()
     if not t:

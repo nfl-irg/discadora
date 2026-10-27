@@ -94,9 +94,9 @@ async def discar_para_livres():
             await cur.execute("SELECT nome, endpoint FROM troncos WHERE id = %s", (tronco_id,))
             nome_tronco, modelo = await cur.fetchone()
             await cur.execute("""INSERT INTO tentativas (campanha_id, campanha_contato_id, telefone,
-                                                         canal, operador, tronco_id)
-                                 VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
-                              (args.campanha, contato["id"], numero, cli_id, op["ramal"], tronco_id))
+                                                         canal, operador, operador_login, tronco_id)
+                                 VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                              (args.campanha, contato["id"], numero, cli_id, op["ramal"], op["login"], tronco_id))
             tentativa_id = (await cur.fetchone())[0]
         chamadas[cli_id] = {"contato": contato, "tentativa_id": tentativa_id,
                             "numero": numero, "operador": op_id, "ponte": None}
@@ -227,11 +227,16 @@ async def tratar(ev):
         if papel == "operador":
             await http.post(f"{ARI}/channels/{cid}/answer")
             ramal = canal["caller"]["number"]
-            operadores[cid] = {"nome": canal["name"], "ramal": ramal, "livre": True}
+            async with db.cursor() as cur:
+                await cur.execute("""SELECT login FROM usuarios
+                                     WHERE ramal = %s AND perfil = 'operador' AND ativo""", (ramal,))
+                linha = await cur.fetchone()
+            login = linha[0] if linha else None
+            operadores[cid] = {"nome": canal["name"], "ramal": ramal, "login": login, "livre": True}
             await db.execute("""INSERT INTO operadores_online (canal, ramal, campanha_id)
                                 VALUES (%s, %s, %s) ON CONFLICT DO NOTHING""",
                              (cid, ramal, args.campanha))
-            print(f"{agora()}  operador {ramal} entrou e esta disponivel")
+            print(f"{agora()}  operador {login or '(sem login)'} (ramal {ramal}) entrou e esta disponivel")
         elif papel == "cliente" and cid in chamadas:
             c = chamadas[cid]
             if c["operador"] not in operadores:

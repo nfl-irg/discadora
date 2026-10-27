@@ -24,7 +24,14 @@
         {% endfor %}
       </select>
     </label>
-    <label>Operador (ramal) <input name="operador" value="{{ f.operador }}" placeholder="7001"></label>
+    <label>Operador
+      <select name="operador">
+        <option value="">Todos</option>
+        {% for o in operadores %}
+        <option value="{{ o.login }}" {% if f.operador == o.login %}selected{% endif %}>{{ o.login }} · {{ o.nome }}</option>
+        {% endfor %}
+      </select>
+    </label>
     <label>Conversa mínima (s) <input name="min_seg" type="number" min="0" value="{{ f.min_seg }}" placeholder="60"></label>
     <label>De <input name="de" type="date" value="{{ f.de }}"></label>
     <label>Até <input name="ate" type="date" value="{{ f.ate }}"></label>

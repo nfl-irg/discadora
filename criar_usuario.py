@@ -12,8 +12,8 @@ p.add_argument("--perfil", required=True, choices=PERFIS)
 p.add_argument("--ramal", help="ramal do operador, ex.: 7001")
 a = p.parse_args()
 
-senha = getpass.getpass("Senha (minimo 10 caracteres): ")
-if len(senha) < 10:
+senha = getpass.getpass("Senha (minimo 6 caracteres): ")
+if len(senha) < 6:
     raise SystemExit("Senha curta demais.")
 if senha != getpass.getpass("Repita a senha: "):
     raise SystemExit("As senhas nao conferem.")
