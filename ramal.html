@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><title>Ramal WebRTC</title>
+<script src="jssip.min.js"></script>
+<style>
+ body{font-family:sans-serif;max-width:420px;margin:2em auto}
+ input,button{font-size:1em;margin:.2em 0;padding:.4em}
+ #status{font-weight:bold}
+</style></head><body>
+<h2>Ramal WebRTC</h2>
+<label>Ramal <input id="ramal" value="7001"></label><br>
+<label>Senha <input id="senha" type="password"></label><br>
+<button id="conectar">Conectar</button>
+<p>Status: <span id="status">desconectado</span></p>
+<input id="destino" placeholder="Número (ex.: 100 ou 6002)"> <button id="ligar">Ligar</button><br>
+<button id="atender" disabled>Atender</button> <button id="desligar" disabled>Desligar</button>
+<audio id="audio" autoplay></audio>
+<script>
+const host = location.hostname;
+const $ = id => document.getElementById(id);
+const opcoesMidia = { mediaConstraints: {audio: true, video: false}, pcConfig: {iceServers: []} };
+let ua = null, sessao = null;
+
+function status(t) { $('status').textContent = t; console.log(t); }
+// quando a conexao de audio for criada, toca o som recebido no <audio>
+function aoCriarConexao(e) {
+  e.peerconnection.addEventListener('track', ev => { $('audio').srcObject = ev.streams[0]; });
+}
+function fim(t) { status(t); sessao = null; $('atender').disabled = true; $('desligar').disabled = true; }
+function prepararSessao(s) {
+  sessao = s;
+  $('desligar').disabled = false;
+  s.on('confirmed', () => { status('em chamada'); $('atender').disabled = true; });
+  s.on('ended', () => fim('chamada encerrada'));
+  s.on('failed', e => fim('falhou: ' + e.cause));
+}
+
+$('conectar').onclick = () => {
+  const socket = new JsSIP.WebSocketInterface(`wss://${host}:8089/ws`);
+  ua = new JsSIP.UA({ sockets: [socket], uri: `sip:${$('ramal').value}@${host}`,
+                      password: $('senha').value, register: true });
+  ua.on('connected', () => status('conectado, registrando...'));
+  ua.on('registered', () => status('disponível'));
+  ua.on('registrationFailed', e => status('falha no registro: ' + e.cause));
+  ua.on('disconnected', () => status('desconectado'));
+  ua.on('newRTCSession', e => {
+    if (e.originator !== 'remote') return;                         // chamadas que chegam
+    if (sessao) { e.session.terminate({status_code: 486}); return; } // ja ocupado
+    e.session.on('peerconnection', aoCriarConexao);
+    prepararSessao(e.session);
+    status('tocando: ' + e.request.from.uri.user);
+    $('atender').disabled = false;
+  });
+  ua.start();
+};
+$('ligar').onclick = () => {
+  if (!ua || sessao) return;
+  const s = ua.call(`sip:${$('destino').value}@${host}`,
+                    { ...opcoesMidia, eventHandlers: { peerconnection: aoCriarConexao } });
+  prepararSessao(s);
+  status('chamando ' + $('destino').value);
+};
+$('atender').onclick = () => sessao && sessao.answer(opcoesMidia);
+$('desligar').onclick = () => sessao && sessao.terminate();
+</script></body></html>

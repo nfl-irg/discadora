@@ -1,0 +1,14 @@
+# ambiente Python (recriavel com pip)
+.venv/
+__pycache__/
+
+# senhas
+ari_senha.txt
+.pgpass
+
+# dados pessoais e arquivos gerados
+exportacoes/
+*.csv
+*.wav
+*.mp3
+*.zip
