@@ -50,7 +50,7 @@ def sortear_lote(conn, campanha_id, quantidade):
         params["quarentena"] = quarentena
     where = " AND ".join(condicoes) or "true"
 
-    consulta = f"""SELECT c.telefone, c.uf, c.cidade, c.mesorregiao, c.bairro, c.tipo,
+    consulta = f"""SELECT c.telefone, c.uf, c.cidade, c.mesorregiao, c.bairro, c.regional, c.tipo,
                           c.sexo, c.idade, c.escolaridade, c.renda, c.ocupacao
                    FROM vw_discadora_contatos c
                    WHERE {where}

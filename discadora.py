@@ -263,6 +263,7 @@ async def tratar(ev):
 
     elif tipo == "ChannelDestroyed" and cid in chamadas:
         c = chamadas[cid]
+        await db.execute("UPDATE tentativas SET sip_codigo = %s WHERE id = %s", (ev.get("tech_cause"), c["tentativa_id"]))
         if c.get("atendida_em"):
             await finalizar(cid, c.get("resultado_forcado", "atendida"), None, None)
         else:

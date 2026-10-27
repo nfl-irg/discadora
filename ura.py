@@ -323,6 +323,7 @@ async def tratar(ev):
         await tecla(cid, ev["digit"])
 
     elif tipo == "ChannelDestroyed":
+        await db.execute("UPDATE tentativas SET sip_codigo = %s WHERE id = %s", (ev.get("tech_cause"), c["tentativa_id"]))
         if c.get("atendida_em"):
             if c.get("caixa_postal"):
                 resultado = "caixa_postal"
