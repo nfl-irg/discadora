@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block titulo %}Nova campanha{% endblock %}
+{% block conteudo %}
+<p><a href="/campanhas">← Campanhas</a></p>
+<h2>Nova campanha</h2>
+<div class="grade">
+  <a href="/campanhas/nova/base">Da base própria<br>
+     <span class="discreto">Sorteia contatos do seu mailing por região</span></a>
+  <a href="/campanhas/nova/lista">De uma lista de cliente<br>
+     <span class="discreto">Importa um arquivo CSV (próxima etapa)</span></a>
+</div>
+{% endblock %}

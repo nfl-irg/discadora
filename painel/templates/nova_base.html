@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block titulo %}Nova campanha: base própria{% endblock %}
+{% block conteudo %}
+<style>
+  form.campos { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+                gap: 14px; align-items: end; }
+  form.campos label { display: flex; flex-direction: column; gap: 4px; font-size: .85em; color: #555; }
+  form.campos label.check { flex-direction: row; align-items: center; gap: 8px; font-size: .95em; }
+  #saldo { font-size: 1.1em; font-weight: 600; color: var(--azul); }
+  h3 { margin: 20px 0 8px; }
+</style>
+<p><a href="/campanhas/nova">← Voltar</a></p>
+<div class="cartao">
+  <h2>Nova campanha da base própria</h2>
+  <form method="post" action="/campanhas/nova/base" id="form">
+    <h3>Identificação</h3>
+    <div class="campos" style="display:grid">
+      <label>Nome da campanha <input name="nome" required placeholder="CWB_200K2"></label>
+      <label>Projeto <input name="projeto" required placeholder="Tracking Governador"></label>
+      <label>Tipo
+        <select name="tipo" id="tipo">
+          <option value="call">Operadores</option>
+          <option value="ura">URA</option>
+        </select>
+      </label>
+      <label id="campo-canais" hidden>Canais da URA <input name="max_canais" type="number" value="60" min="1"></label>
+    </div>
+
+    <h3>Região</h3>
+    <div class="campos" style="display:grid">
+      <label>UF <select name="uf" id="uf" required></select></label>
+      <label>Mesorregião <select name="mesorregiao" id="meso"></select></label>
+      <label>Cidade <select name="cidade" id="cidade"></select></label>
+    </div>
+    <p id="saldo"></p>
+    <p class="discreto">Contagem da base, guardada por 10 minutos
+       (<a href="/campanhas/nova/base?atualizar=1">atualizar agora</a>).
+       Blocklist e quarentena são descontadas no sorteio.</p>
+
+    <h3>Contatos e ligações</h3>
+    <div class="campos" style="display:grid">
+      <label>Tipo de telefone
+        <select name="tipo_tel">
+          <option value="">Celular e fixo</option>
+          <option value="CELULAR">Só celular</option>
+          <option value="FIXO">Só fixo</option>
+        </select>
+      </label>
+      <label>Quarentena (dias) <input name="quarentena" type="number" min="1" placeholder="vazio = sem quarentena"></label>
+      <label>Chamadas por contato
+        <select name="tentativas"><option>1</option><option>2</option><option>3</option></select>
+      </label>
+      <label>Tamanho do lote <input name="lote" type="number" value="5000" min="100" max="50000"></label>
+      <label>Ligar das <input name="janela_inicio" type="time" value="09:00"></label>
+      <label>até <input name="janela_fim" type="time" value="20:00"></label>
+      <label class="check"><input type="checkbox" name="so_quentes" value="1"> Só contatos quentes</label>
+    </div>
+
+    <p style="margin-top:20px"><button id="criar">Criar campanha</button>
+       <span class="discreto">A campanha é criada parada; o sorteio do primeiro lote leva alguns segundos.</span></p>
+  </form>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const regioes = {{ regioes|tojson }};
+const unicos = lista => [...new Set(lista)].sort();
+const uf = $('uf'), meso = $('meso'), cidade = $('cidade');
+
+function preencher(sel, valores, comTodas) {
+  sel.innerHTML = '';
+  if (comTodas) { const o = document.createElement('option'); o.value = ''; o.textContent = 'Todas'; sel.append(o); }
+  for (const v of valores) {
+    const o = document.createElement('option'); o.value = v; o.textContent = v || '(sem mesorregião)'; sel.append(o);
+  }
+}
+function mostrarSaldo() {
+  const f = regioes.filter(r => r.uf === uf.value
+                             && (!meso.value || r.mesorregiao === meso.value)
+                             && (!cidade.value || r.cidade === cidade.value));
+  const total = f.reduce((s, r) => s + r.total, 0), cel = f.reduce((s, r) => s + r.celulares, 0);
+  $('saldo').textContent = `${total.toLocaleString('pt-BR')} contatos na base · ${cel.toLocaleString('pt-BR')} celulares`;
+}
+uf.onchange = () => {
+  preencher(meso, unicos(regioes.filter(r => r.uf === uf.value).map(r => r.mesorregiao)), true);
+  meso.onchange();
+};
+meso.onchange = () => {
+  preencher(cidade, unicos(regioes.filter(r => r.uf === uf.value
+                                         && (!meso.value || r.mesorregiao === meso.value))
+                                  .map(r => r.cidade)), true);
+  mostrarSaldo();
+};
+cidade.onchange = mostrarSaldo;
+$('tipo').onchange = () => { $('campo-canais').hidden = $('tipo').value !== 'ura'; };
+$('form').onsubmit = () => { $('criar').disabled = true; $('criar').textContent = 'Criando…'; };
+
+preencher(uf, unicos(regioes.map(r => r.uf)), false);
+if (regioes.some(r => r.uf === 'PR')) uf.value = 'PR';
+uf.onchange();
+</script>
+{% endblock %}

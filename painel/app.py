@@ -387,7 +387,7 @@ def lista_campanhas(request: Request):
                                       {"usuario": u, "campanhas": campanhas})
 
 
-@app.get("/campanhas/{cid}", response_class=HTMLResponse)
+@app.get("/campanhas/{cid:int}", response_class=HTMLResponse)
 def detalhe_campanha(request: Request, cid: int):
     u = usuario_atual(request, "campanhas")
     with db() as conn:
@@ -418,7 +418,7 @@ def detalhe_campanha(request: Request, cid: int):
          "motor": motor, "log": log})
 
 
-@app.post("/campanhas/{cid}/acao")
+@app.post("/campanhas/{cid:int}/acao")
 def acao_campanha(request: Request, cid: int, acao: str = Form(...)):
     u = usuario_atual(request, "campanhas")
     detalhe = {"campanha": cid}
@@ -443,7 +443,7 @@ def acao_campanha(request: Request, cid: int, acao: str = Form(...)):
     return RedirectResponse(f"/campanhas/{cid}", status_code=303)
 
 
-@app.get("/campanhas/{cid}/relatorio")
+@app.get("/campanhas/{cid:int}/relatorio")
 def baixar_relatorio(request: Request, cid: int):
     u = usuario_atual(request, "campanhas")
     destino = Path(tempfile.mkdtemp()) / f"retorno_campanha_{cid}_{datetime.now():%Y%m%d_%H%M}.csv"
@@ -457,7 +457,7 @@ def baixar_relatorio(request: Request, cid: int):
     return FileResponse(destino, media_type="text/csv", filename=destino.name)
 
 
-@app.get("/campanhas/{cid}/exportar-ura")
+@app.get("/campanhas/{cid:int}/exportar-ura")
 def baixar_exportacao_ura(request: Request, cid: int, arquivo: str = "relatorio", todos: int = 0):
     u = usuario_atual(request, "campanhas")
     try:
@@ -503,6 +503,74 @@ def retomar(request: Request):
     evento_discadora("retomar", canal)
     auditar(u["id"], "operador_retomar", request)
     return {"ok": True}
+
+
+# ------------------------------ nova campanha: base propria ------------------------------
+import time as _time
+import campanhas as mod_campanhas
+
+_regioes = {"quando": 0.0, "dados": []}
+
+
+def regioes_base(forcar=False):
+    """Contatos na base por UF, mesorregiao e cidade (guardado por 10 minutos)."""
+    if forcar or not _regioes["dados"] or _time.time() - _regioes["quando"] > 600:
+        with psycopg.connect(mod_campanhas.DSN_MAILING, row_factory=dict_row) as m:
+            _regioes["dados"] = m.execute("""
+                SELECT uf, coalesce(mesorregiao, '') AS mesorregiao, cidade, total, celulares
+                FROM vw_discadora_saldo ORDER BY uf, mesorregiao, cidade""").fetchall()
+        _regioes["quando"] = _time.time()
+    return _regioes["dados"]
+
+
+@app.get("/campanhas/nova", response_class=HTMLResponse)
+def nova_campanha(request: Request):
+    u = usuario_atual(request, "campanhas")
+    return templates.TemplateResponse(request, "nova_campanha.html", {"usuario": u})
+
+
+@app.get("/campanhas/nova/base", response_class=HTMLResponse)
+def nova_base(request: Request, atualizar: int = 0):
+    u = usuario_atual(request, "campanhas")
+    return templates.TemplateResponse(request, "nova_base.html",
+                                      {"usuario": u, "regioes": regioes_base(bool(atualizar))})
+
+
+@app.post("/campanhas/nova/base")
+def criar_campanha_base(request: Request, nome: str = Form(...), projeto: str = Form(...),
+                        tipo: str = Form("call"), uf: str = Form(...),
+                        mesorregiao: str = Form(""), cidade: str = Form(""),
+                        tipo_tel: str = Form(""), so_quentes: str = Form(""),
+                        quarentena: str = Form(""), tentativas: int = Form(1),
+                        lote: int = Form(5000), janela_inicio: str = Form("09:00"),
+                        janela_fim: str = Form("20:00"), max_canais: str = Form("")):
+    u = usuario_atual(request, "campanhas")
+    if tipo not in ("call", "ura") or tentativas not in (1, 2, 3):
+        raise HTTPException(status_code=400)
+    filtro = {"uf": uf.upper()}
+    if mesorregiao:
+        filtro["mesorregiao"] = mesorregiao
+    if cidade:
+        filtro["cidade"] = cidade
+    if tipo_tel in ("CELULAR", "FIXO"):
+        filtro["tipo"] = tipo_tel
+    if so_quentes:
+        filtro["so_quentes"] = True
+    dias = int(quarentena) if quarentena else None
+    # as funcoes do campanhas.py usam uma conexao propria (linhas como tuplas)
+    with psycopg.connect(mod_campanhas.DSN_DISCADORA) as conn:
+        cid = mod_campanhas.criar_campanha(conn, projeto.strip(), nome.strip(), filtro,
+                                           dias, tentativas)
+        conn.execute("""UPDATE campanhas SET tipo = %s, janela_inicio = %s, janela_fim = %s,
+                                             max_canais = %s
+                        WHERE id = %s""",
+                     (tipo, janela_inicio, janela_fim,
+                      int(max_canais) if (tipo == "ura" and max_canais) else None, cid))
+        conn.commit()
+        lote_id, sorteados, inseridos = mod_campanhas.sortear_lote(conn, cid, max(100, lote))
+    auditar(u["id"], "campanha_criada", request, campanha=cid, origem="base",
+            filtro=filtro, contatos=inseridos)
+    return RedirectResponse(f"/campanhas/{cid}", status_code=303)
 
 
 # modulos ainda nao construidos: so verifica a permissao e mostra "em construcao"
