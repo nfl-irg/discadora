@@ -247,12 +247,15 @@ def estado_operador(request: Request):
     """O que o operador esta fazendo agora e, se houver chamada, os dados do contato."""
     u = operador_com_ramal(request)
     with db() as conn:
-        op = conn.execute("""SELECT estado, tentativa_atual FROM operadores_online
+        op = conn.execute("""SELECT estado, tentativa_atual, pausa_solicitada,
+                                    extract(epoch FROM now() - estado_desde)::int AS segundos
+                             FROM operadores_online
                              WHERE ramal = %s ORDER BY desde DESC LIMIT 1""",
                           (u["ramal"],)).fetchone()
         if not op:
             return {"online": False}
-        resp = {"online": True, "estado": op["estado"], "contato": None}
+        resp = {"online": True, "estado": op["estado"], "contato": None,
+                "pausa_solicitada": op["pausa_solicitada"], "segundos": op["segundos"]}
         if op["tentativa_atual"]:
             t = conn.execute("""SELECT t.telefone, t.tabulacao, cc.uf, cc.cidade, cc.dados,
                                        c.nome AS campanha, c.campos_tela, c.questionario_url,
@@ -464,6 +467,42 @@ def baixar_exportacao_ura(request: Request, cid: int, arquivo: str = "relatorio"
     alvo = pipeline if arquivo == "pipeline" else relatorio
     auditar(u["id"], "exportacao_ura", request, campanha=cid, arquivo=arquivo)
     return FileResponse(alvo, media_type="text/csv", filename=alvo.name)
+
+
+# ------------------------------ pausa do operador ------------------------------
+def evento_discadora(nome, canal):
+    """Avisa a discadora na hora, por um evento de usuario da ARI."""
+    httpx.post(f"{ARI}/events/user/{nome}", params={"application": "discadora"},
+               json={"variables": {"canal": canal}}, auth=ARI_AUTH, timeout=5)
+
+
+def canal_do_operador(u):
+    with db() as conn:
+        op = conn.execute("SELECT canal FROM operadores_online WHERE ramal = %s",
+                          (u["ramal"],)).fetchone()
+    return op["canal"] if op else None
+
+
+@app.post("/operador/pausar")
+def pausar(request: Request):
+    u = operador_com_ramal(request)
+    canal = canal_do_operador(u)
+    if not canal:
+        return JSONResponse({"ok": False, "erro": "Você não está na fila"}, status_code=409)
+    evento_discadora("pausar", canal)
+    auditar(u["id"], "operador_pausa", request)
+    return {"ok": True}
+
+
+@app.post("/operador/retomar")
+def retomar(request: Request):
+    u = operador_com_ramal(request)
+    canal = canal_do_operador(u)
+    if not canal:
+        return JSONResponse({"ok": False, "erro": "Você não está na fila"}, status_code=409)
+    evento_discadora("retomar", canal)
+    auditar(u["id"], "operador_retomar", request)
+    return {"ok": True}
 
 
 # modulos ainda nao construidos: so verifica a permissao e mostra "em construcao"

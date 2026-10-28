@@ -14,6 +14,7 @@
   .campo b { font-size: 1.05em; }
   .sec, a.botao { background: #fff; color: var(--azul); border: 1px solid var(--azul);
                   padding: 8px 10px; border-radius: 6px; text-decoration: none; cursor: pointer; }
+  button:disabled { opacity: .55; cursor: default; }
   #tabulacao { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--borda); }
   #opcoes { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 </style>
@@ -21,7 +22,8 @@
 <div class="cartao linha">
   <span id="status" class="pausa">Conectando o ramal…</span>
   <button id="disp" disabled>Ficar disponível</button>
-  <button id="pausa" class="sec" disabled>Pausa</button>
+  <button id="pausa" class="sec" hidden>Pausa</button>
+  <button id="sair" class="sec" hidden>Sair da fila</button>
   <span class="discreto">Ramal {{ usuario.ramal }}</span>
 </div>
 
@@ -46,9 +48,10 @@
 <script src="/static/jssip.min.js"></script>
 <script>
 const $ = id => document.getElementById(id);
-let ua = null, fila = null, dominio = null, telefoneAtual = null;
+let ua = null, fila = null, dominio = null, telefoneAtual = null, registrado = false, estado = null;
 
 function mostrarStatus(texto, classe) { $('status').textContent = texto; $('status').className = classe; }
+function mmss(s) { s = s || 0; return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
 
 async function iniciar() {
   const r = await fetch('/operador/credenciais');
@@ -57,28 +60,38 @@ async function iniciar() {
   dominio = c.dominio;
   ua = new JsSIP.UA({ sockets: [new JsSIP.WebSocketInterface(c.wss)],
                       uri: `sip:${c.ramal}@${c.dominio}`, password: c.senha, register: true });
-  ua.on('registered', () => { if (!fila) { mostrarStatus('Em pausa', 'pausa'); $('disp').disabled = false; } });
+  ua.on('registered', () => { registrado = true; $('disp').disabled = false;
+                              if (!fila) mostrarStatus('Fora da fila', 'pausa'); });
   ua.on('registrationFailed', e => mostrarStatus('Falha ao conectar o ramal: ' + e.cause, 'pausa'));
-  ua.on('disconnected', () => mostrarStatus('Sem conexão com o servidor de voz', 'pausa'));
+  ua.on('disconnected', () => { registrado = false; mostrarStatus('Sem conexão com o servidor de voz', 'pausa'); });
   ua.on('newRTCSession', e => { if (e.originator === 'remote') e.session.terminate({ status_code: 486 }); });
   ua.start();
 }
 
-$('disp').onclick = () => {
-  $('disp').disabled = true;
+function entrarNaFila() {
   fila = ua.call(`sip:900@${dominio}`, {
     mediaConstraints: { audio: true, video: false }, pcConfig: { iceServers: [] },
     eventHandlers: { peerconnection: e => e.peerconnection.addEventListener('track',
                        ev => { $('audio').srcObject = ev.streams[0]; }) } });
-  fila.on('confirmed', () => { $('pausa').disabled = false; });
-  const saiu = () => { fila = null; $('pausa').disabled = true; $('disp').disabled = false;
-                       mostrarStatus('Em pausa', 'pausa'); $('aguardando').hidden = true; };
+  const saiu = () => { fila = null; atualizar(); };
   fila.on('ended', saiu);
   fila.on('failed', saiu);
+}
+
+// "Ficar disponivel": entra na fila; se ja estiver nela em pausa, volta a receber ligacoes
+$('disp').onclick = async () => {
+  if (!fila) entrarNaFila();
+  else await fetch('/operador/retomar', { method: 'POST' });
+  atualizar();
 };
 
-$('pausa').onclick = () => {
-  if (telefoneAtual && !confirm('Há uma ligação em andamento ou sem tabulação. Entrar em pausa mesmo assim?')) return;
+// "Pausa": sem chamada, pausa na hora; com chamada, pausa depois que ela terminar
+$('pausa').onclick = async () => { await fetch('/operador/pausar', { method: 'POST' }); atualizar(); };
+
+// "Sair da fila": desliga a ligacao com a discadora (fim do turno)
+$('sair').onclick = () => {
+  if (estado === 'em_chamada' &&
+      !confirm('Há uma chamada em andamento. Sair da fila vai encerrá-la. Continuar?')) return;
   if (fila) fila.terminate();
 };
 
@@ -100,7 +113,7 @@ async function tabular(codigo) {
   atualizar();
 }
 
-function desenhar(id, chave, montar) {          // so redesenha quando o conteudo muda
+function desenhar(id, chave, montar) {
   const el = $(id);
   if (el.dataset.chave === chave) return;
   el.dataset.chave = chave;
@@ -115,17 +128,34 @@ async function atualizar() {
     if (r.redirected) { location.reload(); return; }
     e = await r.json();
   } catch { return; }
+  estado = e.online ? e.estado : null;
   const contato = e.online ? e.contato : null;
+  const naFila = !!fila && e.online;
+  const atendendo = estado === 'em_chamada' || estado === 'tabulando';
   telefoneAtual = contato ? contato.telefone : null;
 
+  // status
+  if (!fila)                       { if (registrado) mostrarStatus('Fora da fila', 'pausa'); }
+  else if (!e.online)              mostrarStatus('Entrando na fila…', 'pausa');
+  else if (estado === 'pausa')     mostrarStatus('Em pausa há ' + mmss(e.segundos), 'pausa');
+  else if (estado === 'tabulando') mostrarStatus('Tabule a ligação' + (e.pausa_solicitada ? ' · pausa em seguida' : ''), 'chamada');
+  else if (estado === 'em_chamada') mostrarStatus('Em chamada' + (e.pausa_solicitada ? ' · pausa após esta ligação' : ''), 'chamada');
+  else                             mostrarStatus('Disponível' + (e.pausa_solicitada ? ' · pausa agendada' : ''), 'livre');
+
+  // botoes
+  $('disp').hidden = naFila && estado !== 'pausa';
+  $('disp').textContent = naFila ? 'Voltar a ficar disponível' : 'Ficar disponível';
+  $('disp').disabled = !registrado;
+  $('pausa').hidden = !naFila || estado === 'pausa';
+  $('pausa').disabled = !!e.pausa_solicitada;
+  $('pausa').textContent = e.pausa_solicitada ? 'Pausa agendada'
+                         : (atendendo ? 'Pausa após esta ligação' : 'Pausa');
+  $('sair').hidden = !fila;
+
+  // contato
   $('painel-contato').hidden = !contato;
-  $('aguardando').hidden = !(fila && e.online && !contato);
-  $('encerrar').hidden = e.estado !== 'em_chamada';
-  if (fila && e.online) {
-    if (e.estado === 'tabulando') mostrarStatus('Tabule a ligação', 'chamada');
-    else if (contato)            mostrarStatus('Em chamada', 'chamada');
-    else                         mostrarStatus('Disponível', 'livre');
-  }
+  $('aguardando').hidden = !(naFila && estado === 'livre' && !contato);
+  $('encerrar').hidden = estado !== 'em_chamada';
   if (!contato) return;
 
   $('telefone').textContent = contato.telefone;
@@ -148,7 +178,7 @@ async function atualizar() {
       for (const o of contato.tabulacoes) {
         const b = document.createElement('button');
         b.textContent = o.nome;
-        b.className = o.codigo === contato.tabulacao_escolhida ? '' : 'sec';   // escolhida fica cheia
+        b.className = o.codigo === contato.tabulacao_escolhida ? '' : 'sec';
         b.onclick = () => tabular(o.codigo);
         el.append(b);
       }

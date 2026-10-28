@@ -1,4 +1,5 @@
-"""Discadora progressiva v3: fila do banco, rediscagem e reserva de canais por tronco."""
+"""Discadora progressiva v4: fila do banco, rediscagem, reserva de canais por tronco,
+tabulacao e pausa do operador (inclusive pausa apos a ligacao)."""
 import argparse, asyncio, json, time, uuid
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -18,6 +19,7 @@ FILA_MINIMA = 50
 TAMANHO_LOTE = 5000
 LIMITE_ERROS_TECNICOS = 5
 IGNORAR = {"ChannelVarset", "ChannelDialplan"}
+MANTER = object()                     # marcador: nao mexer no contato mostrado na tela
 
 operadores, chamadas, campanha = {}, {}, {}
 http = db = args = None
@@ -36,6 +38,10 @@ def classificar(causa):
     if causa in (1, 3, 28):       return "invalido"
     if causa in (34, 38, 41, 42): return "falha_rede"
     return "outro"
+
+
+def nome_op(op):
+    return op["login"] or op["ramal"]
 
 
 async def carregar_campanha():
@@ -61,12 +67,37 @@ async def liberar_canal(cli_id):
     await db.execute("DELETE FROM canais_em_uso WHERE canal = %s", (cli_id,))
 
 
+async def mudar_estado(op_id, estado, tentativa=MANTER):
+    """Muda o estado do operador no placar e grava o historico (base do acompanhamento)."""
+    op = operadores.get(op_id)
+    if not op:
+        return
+    if tentativa is MANTER:
+        await db.execute("""UPDATE operadores_online SET estado = %s, estado_desde = now()
+                            WHERE canal = %s""", (estado, op_id))
+    else:
+        await db.execute("""UPDATE operadores_online
+                            SET estado = %s, estado_desde = now(), tentativa_atual = %s
+                            WHERE canal = %s""", (estado, tentativa, op_id))
+    if op.get("estado") != estado:
+        await db.execute("UPDATE operador_estados SET fim = now() WHERE ramal = %s AND fim IS NULL",
+                         (op["ramal"],))
+        await db.execute("""INSERT INTO operador_estados (login, ramal, campanha_id, estado)
+                            VALUES (%s, %s, %s, %s)""",
+                         (op["login"], op["ramal"], args.campanha, estado))
+        op["estado"] = estado
+
+
+def em_ligacao(op_id):
+    return any(c["operador"] == op_id for c in chamadas.values())
+
+
 async def discar_para_livres():
     global ultimo_aviso_sem_canal
     if not pode_discar():
         return
     for op_id, op in list(operadores.items()):
-        if not op["livre"]:
+        if not op["livre"] or op["pausado"]:
             continue
         op["livre"] = False
         cli_id = f"cli-{uuid.uuid4().hex[:12]}"
@@ -82,7 +113,7 @@ async def discar_para_livres():
                 print(f"{agora()}  sem canal disponivel (troncos cheios, inativos ou limite diario)")
             return
 
-        # 2) pega o proximo contato da fila
+        # 2) pega o proximo contato da fila (respeitando as rodadas)
         contato = await proximo_contato()
         if contato is None:
             await liberar_canal(cli_id)
@@ -96,12 +127,13 @@ async def discar_para_livres():
             await cur.execute("""INSERT INTO tentativas (campanha_id, campanha_contato_id, telefone,
                                                          canal, operador, operador_login, tronco_id)
                                  VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
-                              (args.campanha, contato["id"], numero, cli_id, op["ramal"], op["login"], tronco_id))
+                              (args.campanha, contato["id"], numero, cli_id, op["ramal"],
+                               op["login"], tronco_id))
             tentativa_id = (await cur.fetchone())[0]
         chamadas[cli_id] = {"contato": contato, "tentativa_id": tentativa_id,
                             "numero": numero, "operador": op_id, "ponte": None}
         print(f"{agora()}  discando {numero} pelo tronco {nome_tronco} "
-              f"(ja teve {contato['tentativas']} tentativa(s)) para o operador {op['login'] or op['ramal']}")
+              f"(ja teve {contato['tentativas']} tentativa(s)) para {nome_op(op)}")
         r = await http.post(f"{ARI}/channels", params={
             "endpoint": modelo.replace("{numero}", numero), "app": APP, "appArgs": "cliente",
             "channelId": cli_id, "callerId": BINA, "timeout": TEMPO_TOQUE})
@@ -134,14 +166,14 @@ async def finalizar(cli_id, resultado, causa_codigo, causa_texto):
                              JOIN regras_rediscagem r ON r.resultado = t.resultado
                              WHERE t.campanha_contato_id = %s AND NOT r.conta_tentativa""",
                           (contato["id"],))
-        feitas = (await cur.fetchone())["n"]
+        erros = (await cur.fetchone())["n"]
         contadas = contato["tentativas"] + (1 if regra["conta_tentativa"] else 0)
 
         if regra["finaliza"]:
             status, motivo = "finalizado", resultado
         elif contadas >= campanha["max_tentativas"]:
             status, motivo = "finalizado", f"{resultado} (tentativas esgotadas)"
-        elif feitas >= LIMITE_ERROS_TECNICOS:
+        elif erros >= LIMITE_ERROS_TECNICOS:
             status, motivo = "finalizado", "falha_tecnica"
         else:
             status, motivo = "pendente", resultado
@@ -163,25 +195,35 @@ async def finalizar(cli_id, resultado, causa_codigo, causa_texto):
     quando = "" if status == "finalizado" else f" | nova tentativa em {regra['intervalo']}"
     print(f"{agora()}  >>> {c['numero']}: {resultado} "
           f"({causa_codigo or '-'} {causa_texto or ''}) -> {motivo} [{status}]{quando}")
-    # tabulacao: se a campanha pede e a ligacao foi atendida, espera o operador escolher
+    await depois_da_chamada(c)
+
+
+async def depois_da_chamada(c):
+    """Decide o que o operador faz agora: tabular, ficar em pausa ou receber a proxima."""
+    op_id = c["operador"]
+    op = operadores.get(op_id)
+    if not op:
+        return                                   # o operador ja saiu da fila
+    atendida = bool(c.get("atendida_em"))
     precisa_tabular = False
-    if c.get("atendida_em") and campanha["tabulacao_ativa"] and c["operador"] in operadores:
+    if atendida and campanha["tabulacao_ativa"]:
         async with db.cursor() as cur:
             await cur.execute("SELECT tabulacao FROM tentativas WHERE id = %s", (c["tentativa_id"],))
             precisa_tabular = (await cur.fetchone())[0] is None
     if precisa_tabular:
-        await db.execute("UPDATE operadores_online SET estado = 'tabulando' WHERE canal = %s",
-                         (c["operador"],))
-        op = operadores[c["operador"]]
-        print(f"{agora()}  aguardando a tabulacao de {op['login'] or op['ramal']}")
+        await mudar_estado(op_id, "tabulando")
+        print(f"{agora()}  aguardando a tabulacao de {nome_op(op)}")
+    elif op["pausado"]:
+        # pausa apos a ligacao: o contato continua na tela do operador
+        await mudar_estado(op_id, "pausa", c["tentativa_id"] if atendida else None)
+        print(f"{agora()}  {nome_op(op)} entrou em pausa")
     else:
-        await db.execute("UPDATE operadores_online SET estado = 'livre', tentativa_atual = NULL "
-                         "WHERE canal = %s", (c["operador"],))
+        await mudar_estado(op_id, "livre", None)
         if campanha["tabulacao_ativa"]:
-            pausa = 0                       # ja tabulou durante a chamada
+            pausa = 0
         else:
-            pausa = PAUSA_POS_CHAMADA if c.get("atendida_em") else 0
-        asyncio.create_task(liberar_operador(c["operador"], pausa))
+            pausa = PAUSA_POS_CHAMADA if atendida else 0
+        asyncio.create_task(liberar_operador(op_id, pausa))
 
 
 async def liberar_operador(op_id, pausa):
@@ -226,28 +268,52 @@ async def relogio():
         await asyncio.sleep(5)
         await carregar_campanha()
         if operadores:            # sinal de vida dos operadores logados
-            await db.execute("UPDATE operadores_online SET visto_em = now() WHERE canal = ANY(%s)", (list(operadores),))
-        if operadores:            # sinal de vida dos operadores logados
-            await db.execute("UPDATE operadores_online SET visto_em = now() WHERE canal = ANY(%s)", (list(operadores),))
+            await db.execute("UPDATE operadores_online SET visto_em = now() WHERE canal = ANY(%s)",
+                             (list(operadores),))
         await discar_para_livres()
         if time.time() - ultimo_lote > 60:
             ultimo_lote = time.time()
             await repor_lote()
 
 
+async def evento_do_painel(ev):
+    """Avisos enviados pelo painel: tabulacao, pausar e retomar."""
+    nome = ev.get("eventname")
+    op_id = (ev.get("userevent") or {}).get("canal")
+    op = operadores.get(op_id)
+    if not op:
+        return
+    if nome == "tabulacao" and op.get("estado") == "tabulando":
+        if op["pausado"]:
+            await mudar_estado(op_id, "pausa")           # mantem o contato na tela
+            print(f"{agora()}  {nome_op(op)} tabulou e entrou em pausa")
+        else:
+            await mudar_estado(op_id, "livre", None)
+            print(f"{agora()}  {nome_op(op)} tabulou e esta disponivel")
+            asyncio.create_task(liberar_operador(op_id, 0))
+    elif nome == "pausar":
+        op["pausado"] = True
+        await db.execute("UPDATE operadores_online SET pausa_solicitada = true WHERE canal = %s",
+                         (op_id,))
+        if op.get("estado") == "livre" and not em_ligacao(op_id):
+            await mudar_estado(op_id, "pausa", None)     # sem chamada: pausa na hora
+        print(f"{agora()}  {nome_op(op)} pediu pausa")
+    elif nome == "retomar":
+        op["pausado"] = False
+        await db.execute("UPDATE operadores_online SET pausa_solicitada = false WHERE canal = %s",
+                         (op_id,))
+        if op.get("estado") == "pausa":
+            await mudar_estado(op_id, "livre", None)
+            asyncio.create_task(liberar_operador(op_id, 0))
+        print(f"{agora()}  {nome_op(op)} voltou a ficar disponivel")
+
+
 async def tratar(ev):
     tipo = ev["type"]
     if tipo in IGNORAR:
         return
-
-    if tipo == "ChannelUserevent" and ev.get("eventname") == "tabulacao":
-        op_id = (ev.get("userevent") or {}).get("canal")
-        op = operadores.get(op_id)
-        if op and not op["livre"]:
-            await db.execute("UPDATE operadores_online SET estado = 'livre', tentativa_atual = NULL "
-                             "WHERE canal = %s", (op_id,))
-            print(f"{agora()}  {op['login'] or op['ramal']} tabulou e esta disponivel")
-            asyncio.create_task(liberar_operador(op_id, 0))
+    if tipo == "ChannelUserevent":
+        await evento_do_painel(ev)
         return
     canal = ev.get("channel", {})
     cid = canal.get("id", "")
@@ -262,11 +328,13 @@ async def tratar(ev):
                                      WHERE ramal = %s AND perfil = 'operador' AND ativo""", (ramal,))
                 linha = await cur.fetchone()
             login = linha[0] if linha else None
-            operadores[cid] = {"nome": canal["name"], "ramal": ramal, "login": login, "livre": True}
-            await db.execute("""INSERT INTO operadores_online (canal, ramal, campanha_id)
-                                VALUES (%s, %s, %s) ON CONFLICT DO NOTHING""",
-                             (cid, ramal, args.campanha))
-            print(f"{agora()}  operador {login or '(sem login)'} (ramal {ramal}) entrou e esta disponivel")
+            operadores[cid] = {"nome": canal["name"], "ramal": ramal, "login": login,
+                               "livre": True, "pausado": False, "estado": None}
+            await db.execute("""INSERT INTO operadores_online (canal, ramal, login, campanha_id)
+                                VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING""",
+                             (cid, ramal, login, args.campanha))
+            await mudar_estado(cid, "livre", None)
+            print(f"{agora()}  operador {login or '(sem login)'} (ramal {ramal}) entrou na fila")
         elif papel == "cliente" and cid in chamadas:
             c = chamadas[cid]
             if c["operador"] not in operadores:
@@ -282,8 +350,9 @@ async def tratar(ev):
                                 params={"name": cid, "format": "wav"})
                 await db.execute("UPDATE tentativas SET atendida_em = now() WHERE id = %s",
                                  (c["tentativa_id"],))
-                print(f"{agora()}  {c['numero']} ATENDEU -> conectado ao operador")
-                await db.execute("UPDATE operadores_online SET estado = 'em_chamada', tentativa_atual = %s WHERE canal = %s", (c["tentativa_id"], c["operador"]))
+                await mudar_estado(c["operador"], "em_chamada", c["tentativa_id"])
+                print(f"{agora()}  {c['numero']} ATENDEU -> conectado a "
+                      f"{nome_op(operadores[c['operador']])}")
 
     elif tipo == "StasisEnd":
         if cid in chamadas:
@@ -291,7 +360,9 @@ async def tratar(ev):
         elif cid in operadores:
             op = operadores.pop(cid)
             await db.execute("DELETE FROM operadores_online WHERE canal = %s", (cid,))
-            print(f"{agora()}  operador {op['login'] or op['ramal']} saiu")
+            await db.execute("UPDATE operador_estados SET fim = now() WHERE ramal = %s AND fim IS NULL",
+                             (op["ramal"],))
+            print(f"{agora()}  operador {nome_op(op)} saiu da fila")
             for cli_id, c in list(chamadas.items()):
                 if c["operador"] == cid and c.get("ponte"):
                     c["resultado_forcado"] = "operador_desligou"
@@ -299,7 +370,8 @@ async def tratar(ev):
 
     elif tipo == "ChannelDestroyed" and cid in chamadas:
         c = chamadas[cid]
-        await db.execute("UPDATE tentativas SET sip_codigo = %s WHERE id = %s", (ev.get("tech_cause"), c["tentativa_id"]))
+        await db.execute("UPDATE tentativas SET sip_codigo = %s WHERE id = %s",
+                         (ev.get("tech_cause"), c["tentativa_id"]))
         if c.get("atendida_em"):
             await finalizar(cid, c.get("resultado_forcado", "atendida"), None, None)
         else:
@@ -311,7 +383,7 @@ async def tratar(ev):
 
 async def main():
     global http, db, args
-    p = argparse.ArgumentParser(description="Discadora progressiva v3")
+    p = argparse.ArgumentParser(description="Discadora progressiva v4")
     p.add_argument("--campanha", type=int, required=True)
     args = p.parse_args()
 
@@ -332,11 +404,12 @@ async def main():
     if so_lab and tem_reais:
         raise SystemExit("A campanha tem telefones reais, mas so ha troncos de laboratorio ativos.")
 
-    # recuperacao de queda: contatos presos, canais e operadores que ficaram no placar
+    # recuperacao de queda: contatos presos, canais, operadores e estados abertos
     await db.execute("""UPDATE campanha_contatos SET status = 'pendente'
                         WHERE campanha_id = %s AND status = 'discando'""", (args.campanha,))
     await db.execute("DELETE FROM canais_em_uso WHERE tipo = 'call'")
     await db.execute("DELETE FROM operadores_online")
+    await db.execute("UPDATE operador_estados SET fim = now() WHERE fim IS NULL")
     await db.execute("UPDATE campanhas SET status = 'ativa' WHERE id = %s AND status = 'rascunho'",
                      (args.campanha,))
     await carregar_campanha()
