@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block titulo %}Operador{% endblock %}
+{% block conteudo %}
+<style>
+  .linha { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  #status { font-weight: 700; padding: 6px 14px; border-radius: 20px; }
+  #status.pausa   { background: #eef0f6; color: #444; }
+  #status.livre   { background: #e3f4e8; color: #1b6b34; }
+  #status.chamada { background: #fde8e1; color: #a8380f; }
+  #telefone { font-size: 2em; font-weight: 700; letter-spacing: .03em; }
+  .campos { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 12px; margin-top: 16px; }
+  .campo span { display: block; font-size: .8em; color: #666; }
+  .campo b { font-size: 1.05em; }
+  .sec, a.botao { background: #fff; color: var(--azul); border: 1px solid var(--azul);
+                  padding: 8px 10px; border-radius: 6px; text-decoration: none; cursor: pointer; }
+</style>
+
+<div class="cartao linha">
+  <span id="status" class="pausa">Conectando o ramal…</span>
+  <button id="disp" disabled>Ficar disponível</button>
+  <button id="pausa" class="sec" disabled>Pausa</button>
+  <span class="discreto">Ramal {{ usuario.ramal }}</span>
+</div>
+
+<div class="cartao" id="aguardando" hidden><p class="discreto">Aguardando a próxima ligação…</p></div>
+
+<div class="cartao" id="painel-contato" hidden>
+  <div class="discreto" id="campanha"></div>
+  <div class="linha" style="margin-top:8px">
+    <span id="telefone"></span>
+    <button id="copiar" class="sec">Copiar telefone</button>
+    <a id="questionario" class="botao" target="_blank" rel="noopener" hidden>Abrir questionário</a>
+    <button id="encerrar">Encerrar chamada</button>
+  </div>
+  <div class="campos" id="campos"></div>
+</div>
+
+<audio id="audio" autoplay></audio>
+<script src="/static/jssip.min.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+let ua = null, fila = null, dominio = null, telefoneAtual = null;
+
+function mostrarStatus(texto, classe) { $('status').textContent = texto; $('status').className = classe; }
+
+// 1) registra o ramal do operador com os dados entregues pelo painel
+async function iniciar() {
+  const r = await fetch('/operador/credenciais');
+  if (!r.ok) { mostrarStatus('Seu usuário não tem ramal configurado', 'pausa'); return; }
+  const c = await r.json();
+  dominio = c.dominio;
+  ua = new JsSIP.UA({ sockets: [new JsSIP.WebSocketInterface(c.wss)],
+                      uri: `sip:${c.ramal}@${c.dominio}`, password: c.senha, register: true });
+  ua.on('registered', () => { if (!fila) { mostrarStatus('Em pausa', 'pausa'); $('disp').disabled = false; } });
+  ua.on('registrationFailed', e => mostrarStatus('Falha ao conectar o ramal: ' + e.cause, 'pausa'));
+  ua.on('disconnected', () => mostrarStatus('Sem conexão com o servidor de voz', 'pausa'));
+  ua.on('newRTCSession', e => { if (e.originator === 'remote') e.session.terminate({ status_code: 486 }); });
+  ua.start();
+}
+
+// 2) disponivel = ligar para a 900 e ficar na fila da discadora
+$('disp').onclick = () => {
+  $('disp').disabled = true;
+  fila = ua.call(`sip:900@${dominio}`, {
+    mediaConstraints: { audio: true, video: false }, pcConfig: { iceServers: [] },
+    eventHandlers: { peerconnection: e => e.peerconnection.addEventListener('track',
+                       ev => { $('audio').srcObject = ev.streams[0]; }) } });
+  fila.on('confirmed', () => { $('pausa').disabled = false; });
+  const saiu = () => { fila = null; $('pausa').disabled = true; $('disp').disabled = false;
+                       mostrarStatus('Em pausa', 'pausa'); $('aguardando').hidden = true; };
+  fila.on('ended', saiu);
+  fila.on('failed', saiu);
+};
+
+$('pausa').onclick = () => {
+  if (telefoneAtual && !confirm('Há uma chamada em andamento. A pausa vai encerrá-la. Continuar?')) return;
+  if (fila) fila.terminate();
+};
+
+$('encerrar').onclick = () => fetch('/operador/encerrar', { method: 'POST' });
+
+$('copiar').onclick = async () => {
+  await navigator.clipboard.writeText(telefoneAtual);
+  $('copiar').textContent = 'Copiado!';
+  setTimeout(() => { $('copiar').textContent = 'Copiar telefone'; }, 1500);
+};
+
+// 3) a cada segundo, pergunta ao painel se ha alguem na linha
+async function atualizar() {
+  let e;
+  try {
+    const r = await fetch('/operador/estado');
+    if (r.redirected) { location.reload(); return; }      // sessao expirou: volta ao login
+    e = await r.json();
+  } catch { return; }
+  const contato = e.online ? e.contato : null;
+  telefoneAtual = contato ? contato.telefone : null;
+  $('painel-contato').hidden = !contato;
+  $('aguardando').hidden = !(fila && e.online && !contato);
+  if (fila && e.online) mostrarStatus(contato ? 'Em chamada' : 'Disponível', contato ? 'chamada' : 'livre');
+  if (!contato) return;
+  $('telefone').textContent = contato.telefone;
+  $('campanha').textContent = contato.campanha;
+  $('campos').innerHTML = '';
+  for (const c of contato.campos) {
+    const d = document.createElement('div'); d.className = 'campo';
+    const s = document.createElement('span'); s.textContent = c.rotulo;
+    const b = document.createElement('b'); b.textContent = c.valor;
+    d.append(s, b); $('campos').append(d);
+  }
+  const q = $('questionario');
+  q.hidden = !contato.questionario_url;
+  if (contato.questionario_url) q.href = contato.questionario_url;
+}
+
+iniciar();
+setInterval(atualizar, 1000);
+</script>
+{% endblock %}

@@ -117,6 +117,7 @@ async def finalizar(cli_id, resultado, causa_codigo, causa_texto):
     if c is None:
         return
     await liberar_canal(cli_id)                   # devolve o canal ao placar
+    await db.execute("UPDATE operadores_online SET estado = 'livre', tentativa_atual = NULL WHERE canal = %s", (c["operador"],))
     if c.get("ponte"):
         await http.delete(f"{ARI}/bridges/{c['ponte']}")
     conversa = round(time.time() - c["atendida_em"]) if c.get("atendida_em") else None
@@ -253,6 +254,7 @@ async def tratar(ev):
                 await db.execute("UPDATE tentativas SET atendida_em = now() WHERE id = %s",
                                  (c["tentativa_id"],))
                 print(f"{agora()}  {c['numero']} ATENDEU -> conectado ao operador")
+                await db.execute("UPDATE operadores_online SET estado = 'em_chamada', tentativa_atual = %s WHERE canal = %s", (c["tentativa_id"], c["operador"]))
 
     elif tipo == "StasisEnd":
         if cid in chamadas:

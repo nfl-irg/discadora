@@ -152,7 +152,7 @@ def audios(request: Request, telefone: str = "", campanha: str = "", operador: s
         campanhas = conn.execute("""SELECT id, nome FROM campanhas
                                     WHERE tipo = 'call' ORDER BY id DESC""").fetchall()
         operadores = conn.execute("""SELECT login, nome FROM usuarios
-                                     WHERE perfil = 'operador' ORDER BY login""").fetchall()
+                                     WHERE perfil = 'operador' ORDER BY length(login), login""").fetchall()
         resultados = conn.execute("""
             SELECT t.id, t.inicio, coalesce(t.operador_login, t.operador) AS operador,
                    t.telefone, t.conversa_s, t.canal,
@@ -206,6 +206,89 @@ def audio_arquivo(request: Request, tentativa_id: int, baixar: int = 0):
     nome = (f"{t['telefone']}_{t['inicio']:%Y%m%d_%H%M%S}_"
             f"op{t['operador'] or 'ura'}_{t['conversa_s'] or 0}s.wav")
     return FileResponse(arquivo, media_type="audio/wav", filename=nome if baixar else None)
+
+
+# ------------------------------ tela do operador ------------------------------
+import httpx
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+
+app.mount("/static", StaticFiles(directory=BASE / "static"), name="static")
+ARI = "http://127.0.0.1:8088/ari"
+ARI_AUTH = ("discadora", (Path.home() / "lab" / "ari_senha.txt").read_text().strip())
+
+
+def operador_com_ramal(request: Request):
+    u = usuario_atual(request, "operador")
+    if not u["ramal"]:
+        raise HTTPException(status_code=400, detail="Usuario sem ramal")
+    return u
+
+
+@app.get("/operador", response_class=HTMLResponse)
+def tela_operador(request: Request):
+    u = usuario_atual(request, "operador")
+    return templates.TemplateResponse(request, "operador.html", {"usuario": u})
+
+
+@app.get("/operador/credenciais")
+def credenciais(request: Request):
+    """Entrega ao navegador do proprio operador os dados para registrar o ramal dele."""
+    u = operador_com_ramal(request)
+    with db() as conn:
+        r = conn.execute("SELECT senha_sip FROM ramais WHERE ramal = %s", (u["ramal"],)).fetchone()
+    host = request.url.hostname
+    return {"ramal": u["ramal"], "senha": r["senha_sip"], "dominio": host,
+            "wss": f"wss://{host}:8089/ws"}
+
+
+@app.get("/operador/estado")
+def estado_operador(request: Request):
+    """O que o operador esta fazendo agora e, se houver chamada, os dados do contato."""
+    u = operador_com_ramal(request)
+    with db() as conn:
+        op = conn.execute("""SELECT estado, tentativa_atual FROM operadores_online
+                             WHERE ramal = %s ORDER BY desde DESC LIMIT 1""",
+                          (u["ramal"],)).fetchone()
+        if not op:
+            return {"online": False}
+        resp = {"online": True, "estado": op["estado"], "contato": None}
+        if op["tentativa_atual"]:
+            t = conn.execute("""SELECT t.telefone, cc.uf, cc.cidade, cc.dados,
+                                       c.nome AS campanha, c.campos_tela, c.questionario_url,
+                                       c.tabulacao_ativa, c.tabulacoes
+                                FROM tentativas t
+                                JOIN campanha_contatos cc ON cc.id = t.campanha_contato_id
+                                JOIN campanhas c ON c.id = t.campanha_id
+                                WHERE t.id = %s""", (op["tentativa_atual"],)).fetchone()
+            if t:
+                fontes = {"uf": t["uf"], "cidade": t["cidade"], **(t["dados"] or {})}
+                resp["contato"] = {
+                    "telefone": t["telefone"],
+                    "campanha": t["campanha"],
+                    "campos": [{"rotulo": cfg.get("rotulo") or cfg["campo"],
+                                "valor": fontes.get(cfg["campo"]) or "—"}
+                               for cfg in t["campos_tela"]],
+                    "questionario_url": t["questionario_url"],
+                    "tabulacao_ativa": t["tabulacao_ativa"],
+                    "tabulacoes": t["tabulacoes"],
+                }
+    return resp
+
+
+@app.post("/operador/encerrar")
+def encerrar_chamada(request: Request):
+    """Desliga so o contato; o operador continua na fila."""
+    u = operador_com_ramal(request)
+    with db() as conn:
+        t = conn.execute("""SELECT t.canal FROM operadores_online o
+                            JOIN tentativas t ON t.id = o.tentativa_atual
+                            WHERE o.ramal = %s AND o.estado = 'em_chamada'""",
+                         (u["ramal"],)).fetchone()
+    if not t:
+        return JSONResponse({"ok": False, "erro": "Nenhuma chamada em andamento"}, status_code=409)
+    httpx.delete(f"{ARI}/channels/{t['canal']}", auth=ARI_AUTH, timeout=5)
+    return {"ok": True}
 
 
 # modulos ainda nao construidos: so verifica a permissao e mostra "em construcao"
