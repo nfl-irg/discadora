@@ -4,7 +4,7 @@ import secrets
 from pathlib import Path
 import psycopg
 
-INICIO, FIM = 7001, 7020
+INICIO, FIM = 7001, 7025
 
 blocos = ["; Ramais dos operadores - gerado por gerar_ramais.py (nao editar a mao)\n"]
 with psycopg.connect("dbname=discadora") as conn:
