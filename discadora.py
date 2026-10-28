@@ -117,7 +117,6 @@ async def finalizar(cli_id, resultado, causa_codigo, causa_texto):
     if c is None:
         return
     await liberar_canal(cli_id)                   # devolve o canal ao placar
-    await db.execute("UPDATE operadores_online SET estado = 'livre', tentativa_atual = NULL WHERE canal = %s", (c["operador"],))
     if c.get("ponte"):
         await http.delete(f"{ARI}/bridges/{c['ponte']}")
     conversa = round(time.time() - c["atendida_em"]) if c.get("atendida_em") else None
@@ -161,8 +160,25 @@ async def finalizar(cli_id, resultado, causa_codigo, causa_texto):
     quando = "" if status == "finalizado" else f" | nova tentativa em {regra['intervalo']}"
     print(f"{agora()}  >>> {c['numero']}: {resultado} "
           f"({causa_codigo or '-'} {causa_texto or ''}) -> {motivo} [{status}]{quando}")
-    pausa = PAUSA_POS_CHAMADA if c.get("atendida_em") else 0
-    asyncio.create_task(liberar_operador(c["operador"], pausa))
+    # tabulacao: se a campanha pede e a ligacao foi atendida, espera o operador escolher
+    precisa_tabular = False
+    if c.get("atendida_em") and campanha["tabulacao_ativa"] and c["operador"] in operadores:
+        async with db.cursor() as cur:
+            await cur.execute("SELECT tabulacao FROM tentativas WHERE id = %s", (c["tentativa_id"],))
+            precisa_tabular = (await cur.fetchone())[0] is None
+    if precisa_tabular:
+        await db.execute("UPDATE operadores_online SET estado = 'tabulando' WHERE canal = %s",
+                         (c["operador"],))
+        op = operadores[c["operador"]]
+        print(f"{agora()}  aguardando a tabulacao de {op['login'] or op['ramal']}")
+    else:
+        await db.execute("UPDATE operadores_online SET estado = 'livre', tentativa_atual = NULL "
+                         "WHERE canal = %s", (c["operador"],))
+        if campanha["tabulacao_ativa"]:
+            pausa = 0                       # ja tabulou durante a chamada
+        else:
+            pausa = PAUSA_POS_CHAMADA if c.get("atendida_em") else 0
+        asyncio.create_task(liberar_operador(c["operador"], pausa))
 
 
 async def liberar_operador(op_id, pausa):
@@ -219,6 +235,16 @@ async def relogio():
 async def tratar(ev):
     tipo = ev["type"]
     if tipo in IGNORAR:
+        return
+
+    if tipo == "ChannelUserevent" and ev.get("eventname") == "tabulacao":
+        op_id = (ev.get("userevent") or {}).get("canal")
+        op = operadores.get(op_id)
+        if op and not op["livre"]:
+            await db.execute("UPDATE operadores_online SET estado = 'livre', tentativa_atual = NULL "
+                             "WHERE canal = %s", (op_id,))
+            print(f"{agora()}  {op['login'] or op['ramal']} tabulou e esta disponivel")
+            asyncio.create_task(liberar_operador(op_id, 0))
         return
     canal = ev.get("channel", {})
     cid = canal.get("id", "")

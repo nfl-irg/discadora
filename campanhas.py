@@ -62,6 +62,12 @@ def sortear_lote(conn, campanha_id, quantidade):
         colunas = [d.name for d in cur.description]
         linhas = cur.fetchall()
 
+    # bloqueios feitos na tabulacao (ainda nao levados para a d_blocklist)
+    with conn.cursor() as cur:
+        cur.execute("SELECT telefone FROM bloqueios")
+        bloqueados_locais = {r[0] for r in cur.fetchall()}
+    linhas = [l for l in linhas if l[0] not in bloqueados_locais]
+
     with conn.cursor() as cur:
         cur.execute("""INSERT INTO lotes (campanha_id, solicitados, inseridos, regras)
                        VALUES (%s, %s, 0, %s) RETURNING id""",

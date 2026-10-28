@@ -254,7 +254,7 @@ def estado_operador(request: Request):
             return {"online": False}
         resp = {"online": True, "estado": op["estado"], "contato": None}
         if op["tentativa_atual"]:
-            t = conn.execute("""SELECT t.telefone, cc.uf, cc.cidade, cc.dados,
+            t = conn.execute("""SELECT t.telefone, t.tabulacao, cc.uf, cc.cidade, cc.dados,
                                        c.nome AS campanha, c.campos_tela, c.questionario_url,
                                        c.tabulacao_ativa, c.tabulacoes
                                 FROM tentativas t
@@ -272,6 +272,7 @@ def estado_operador(request: Request):
                     "questionario_url": t["questionario_url"],
                     "tabulacao_ativa": t["tabulacao_ativa"],
                     "tabulacoes": t["tabulacoes"],
+                    "tabulacao_escolhida": t["tabulacao"],
                 }
     return resp
 
@@ -288,6 +289,49 @@ def encerrar_chamada(request: Request):
     if not t:
         return JSONResponse({"ok": False, "erro": "Nenhuma chamada em andamento"}, status_code=409)
     httpx.delete(f"{ARI}/channels/{t['canal']}", auth=ARI_AUTH, timeout=5)
+    return {"ok": True}
+
+
+# ------------------------------ tabulacao ------------------------------
+from pydantic import BaseModel
+
+
+class Tabulacao(BaseModel):
+    codigo: str
+
+
+@app.post("/operador/tabular")
+def tabular(request: Request, dados: Tabulacao):
+    u = operador_com_ramal(request)
+    with db() as conn:
+        op = conn.execute("""SELECT o.canal, o.estado, o.tentativa_atual, t.telefone,
+                                    t.campanha_id, c.tabulacoes
+                             FROM operadores_online o
+                             JOIN tentativas t ON t.id = o.tentativa_atual
+                             JOIN campanhas c ON c.id = t.campanha_id
+                             WHERE o.ramal = %s AND o.estado IN ('em_chamada', 'tabulando')""",
+                          (u["ramal"],)).fetchone()
+        if not op:
+            return JSONResponse({"ok": False, "erro": "Nenhuma ligação para tabular"},
+                                status_code=409)
+        opcao = next((x for x in op["tabulacoes"] if x["codigo"] == dados.codigo), None)
+        if not opcao:
+            return JSONResponse({"ok": False, "erro": "Opção inválida"}, status_code=400)
+        conn.execute("UPDATE tentativas SET tabulacao = %s WHERE id = %s",
+                     (opcao["codigo"], op["tentativa_atual"]))
+        if opcao.get("bloqueia"):
+            conn.execute("""INSERT INTO bloqueios (telefone, motivo, origem) VALUES (%s, %s, %s)
+                            ON CONFLICT (telefone) DO NOTHING""",
+                         (op["telefone"], opcao["nome"],
+                          f"campanha {op['campanha_id']}, operador {u['login']}"))
+        # confere de novo: a chamada pode ter acabado enquanto o operador escolhia
+        estado = conn.execute("SELECT estado FROM operadores_online WHERE canal = %s",
+                              (op["canal"],)).fetchone()
+    auditar(u["id"], "tabulacao", request, tentativa_id=op["tentativa_atual"],
+            codigo=opcao["codigo"])
+    if estado and estado["estado"] == "tabulando":
+        httpx.post(f"{ARI}/events/user/tabulacao", params={"application": "discadora"},
+                   json={"variables": {"canal": op["canal"]}}, auth=ARI_AUTH, timeout=5)
     return {"ok": True}
 
 

@@ -91,6 +91,9 @@ def main():
         cur.execute("SELECT telefone_norm FROM d_blocklist WHERE tipo = 'prefixo'")
         prefixos = tuple(r[0] for r in cur.fetchall())
         bloqueados |= {t for t in vistos if t.startswith(prefixos)}
+        with psycopg.connect(DSN_DISCADORA) as d, d.cursor() as c2:
+            c2.execute("SELECT telefone FROM bloqueios WHERE telefone = ANY(%s)", (list(vistos),))
+            bloqueados |= {r[0] for r in c2.fetchall()}
         cur.execute("SELECT cidade_errada, cidade_correta FROM d_cidade_alias")
         apelidos = dict(cur.fetchall())
 

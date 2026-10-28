@@ -14,6 +14,8 @@
   .campo b { font-size: 1.05em; }
   .sec, a.botao { background: #fff; color: var(--azul); border: 1px solid var(--azul);
                   padding: 8px 10px; border-radius: 6px; text-decoration: none; cursor: pointer; }
+  #tabulacao { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--borda); }
+  #opcoes { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 </style>
 
 <div class="cartao linha">
@@ -34,6 +36,10 @@
     <button id="encerrar">Encerrar chamada</button>
   </div>
   <div class="campos" id="campos"></div>
+  <div id="tabulacao" hidden>
+    <span class="discreto">Tabulação</span>
+    <div id="opcoes"></div>
+  </div>
 </div>
 
 <audio id="audio" autoplay></audio>
@@ -44,7 +50,6 @@ let ua = null, fila = null, dominio = null, telefoneAtual = null;
 
 function mostrarStatus(texto, classe) { $('status').textContent = texto; $('status').className = classe; }
 
-// 1) registra o ramal do operador com os dados entregues pelo painel
 async function iniciar() {
   const r = await fetch('/operador/credenciais');
   if (!r.ok) { mostrarStatus('Seu usuário não tem ramal configurado', 'pausa'); return; }
@@ -59,7 +64,6 @@ async function iniciar() {
   ua.start();
 }
 
-// 2) disponivel = ligar para a 900 e ficar na fila da discadora
 $('disp').onclick = () => {
   $('disp').disabled = true;
   fila = ua.call(`sip:900@${dominio}`, {
@@ -74,7 +78,7 @@ $('disp').onclick = () => {
 };
 
 $('pausa').onclick = () => {
-  if (telefoneAtual && !confirm('Há uma chamada em andamento. A pausa vai encerrá-la. Continuar?')) return;
+  if (telefoneAtual && !confirm('Há uma ligação em andamento ou sem tabulação. Entrar em pausa mesmo assim?')) return;
   if (fila) fila.terminate();
 };
 
@@ -86,32 +90,70 @@ $('copiar').onclick = async () => {
   setTimeout(() => { $('copiar').textContent = 'Copiar telefone'; }, 1500);
 };
 
-// 3) a cada segundo, pergunta ao painel se ha alguem na linha
+async function tabular(codigo) {
+  const r = await fetch('/operador/tabular', { method: 'POST',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ codigo }) });
+  if (!r.ok) {
+    const e = await r.json().catch(() => ({}));
+    alert(e.erro || 'Não foi possível registrar a tabulação.');
+  }
+  atualizar();
+}
+
+function desenhar(id, chave, montar) {          // so redesenha quando o conteudo muda
+  const el = $(id);
+  if (el.dataset.chave === chave) return;
+  el.dataset.chave = chave;
+  el.innerHTML = '';
+  montar(el);
+}
+
 async function atualizar() {
   let e;
   try {
     const r = await fetch('/operador/estado');
-    if (r.redirected) { location.reload(); return; }      // sessao expirou: volta ao login
+    if (r.redirected) { location.reload(); return; }
     e = await r.json();
   } catch { return; }
   const contato = e.online ? e.contato : null;
   telefoneAtual = contato ? contato.telefone : null;
+
   $('painel-contato').hidden = !contato;
   $('aguardando').hidden = !(fila && e.online && !contato);
-  if (fila && e.online) mostrarStatus(contato ? 'Em chamada' : 'Disponível', contato ? 'chamada' : 'livre');
+  $('encerrar').hidden = e.estado !== 'em_chamada';
+  if (fila && e.online) {
+    if (e.estado === 'tabulando') mostrarStatus('Tabule a ligação', 'chamada');
+    else if (contato)            mostrarStatus('Em chamada', 'chamada');
+    else                         mostrarStatus('Disponível', 'livre');
+  }
   if (!contato) return;
+
   $('telefone').textContent = contato.telefone;
   $('campanha').textContent = contato.campanha;
-  $('campos').innerHTML = '';
-  for (const c of contato.campos) {
-    const d = document.createElement('div'); d.className = 'campo';
-    const s = document.createElement('span'); s.textContent = c.rotulo;
-    const b = document.createElement('b'); b.textContent = c.valor;
-    d.append(s, b); $('campos').append(d);
-  }
+  desenhar('campos', JSON.stringify(contato.campos), el => {
+    for (const c of contato.campos) {
+      const d = document.createElement('div'); d.className = 'campo';
+      const s = document.createElement('span'); s.textContent = c.rotulo;
+      const b = document.createElement('b'); b.textContent = c.valor;
+      d.append(s, b); el.append(d);
+    }
+  });
   const q = $('questionario');
   q.hidden = !contato.questionario_url;
   if (contato.questionario_url) q.href = contato.questionario_url;
+
+  $('tabulacao').hidden = !contato.tabulacao_ativa;
+  if (contato.tabulacao_ativa) {
+    desenhar('opcoes', JSON.stringify([contato.tabulacoes, contato.tabulacao_escolhida]), el => {
+      for (const o of contato.tabulacoes) {
+        const b = document.createElement('button');
+        b.textContent = o.nome;
+        b.className = o.codigo === contato.tabulacao_escolhida ? '' : 'sec';   // escolhida fica cheia
+        b.onclick = () => tabular(o.codigo);
+        el.append(b);
+      }
+    });
+  }
 }
 
 iniciar();
