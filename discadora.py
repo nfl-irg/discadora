@@ -101,7 +101,7 @@ async def discar_para_livres():
         chamadas[cli_id] = {"contato": contato, "tentativa_id": tentativa_id,
                             "numero": numero, "operador": op_id, "ponte": None}
         print(f"{agora()}  discando {numero} pelo tronco {nome_tronco} "
-              f"(ja teve {contato['tentativas']} tentativa(s)) para o operador {op['ramal']}")
+              f"(ja teve {contato['tentativas']} tentativa(s)) para o operador {op['login'] or op['ramal']}")
         r = await http.post(f"{ARI}/channels", params={
             "endpoint": modelo.replace("{numero}", numero), "app": APP, "appArgs": "cliente",
             "channelId": cli_id, "callerId": BINA, "timeout": TEMPO_TOQUE})
@@ -262,7 +262,7 @@ async def tratar(ev):
         elif cid in operadores:
             op = operadores.pop(cid)
             await db.execute("DELETE FROM operadores_online WHERE canal = %s", (cid,))
-            print(f"{agora()}  operador {op['ramal']} saiu")
+            print(f"{agora()}  operador {op['login'] or op['ramal']} saiu")
             for cli_id, c in list(chamadas.items()):
                 if c["operador"] == cid and c.get("ponte"):
                     c["resultado_forcado"] = "operador_desligou"
@@ -319,7 +319,7 @@ async def main():
             print(f"Discadora no ar | campanha {campanha['id']} '{campanha['nome']}' | "
                   f"janela {campanha['janela_inicio']}-{campanha['janela_fim']} | "
                   f"max {campanha['max_tentativas']} tentativas")
-            print("Operador: no navegador (7001), ligue para 900.")
+            print("Operadores: abram a Tela do operador no painel e cliquem em Ficar disponivel.")
             asyncio.create_task(relogio())
             async for msg in ws:
                 await tratar(json.loads(msg))
