@@ -1,0 +1,14 @@
+[Unit]
+Description=Painel da discadora
+
+[Service]
+Type=simple
+WorkingDirectory=%h/lab/painel
+ExecStart=%h/lab/.venv/bin/uvicorn app:app --host 0.0.0.0 --port 8443 --ssl-keyfile %h/lab/certs/asterisk.key --ssl-certfile %h/lab/certs/asterisk.crt --no-access-log
+Restart=on-failure
+RestartSec=3
+StandardOutput=append:%h/lab/logs/painel.log
+StandardError=inherit
+
+[Install]
+WantedBy=default.target

@@ -335,6 +335,137 @@ def tabular(request: Request, dados: Tabulacao):
     return {"ok": True}
 
 
+# ------------------------------ campanhas ------------------------------
+import os, subprocess, tempfile
+from collections import deque
+from datetime import datetime
+import relatorio_retorno, exportar_ura
+
+PASTA_LOGS = Path.home() / "lab" / "logs"
+REAPROVEITAVEIS = "('atendida', 'respondente', 'invalido', 'atendido em outro telefone')"
+
+
+def systemctl(*args):
+    """Comanda os servicos do usuario (discadora@N, ura@N)."""
+    uid = os.getuid()
+    env = {**os.environ, "XDG_RUNTIME_DIR": f"/run/user/{uid}",
+           "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{uid}/bus"}
+    return subprocess.run(["systemctl", "--user", *args], capture_output=True,
+                          text=True, env=env, timeout=15)
+
+
+def servico(c):
+    return f"{'ura' if c['tipo'] == 'ura' else 'discadora'}@{int(c['id'])}"
+
+
+def buscar_campanha(conn, cid):
+    c = conn.execute("SELECT * FROM campanhas WHERE id = %s", (cid,)).fetchone()
+    if not c:
+        raise HTTPException(status_code=404)
+    return c
+
+
+@app.get("/campanhas", response_class=HTMLResponse)
+def lista_campanhas(request: Request):
+    u = usuario_atual(request, "campanhas")
+    with db() as conn:
+        campanhas = conn.execute("""
+            SELECT c.id, c.nome, c.tipo, c.origem, c.status,
+                   count(cc.id) AS total,
+                   count(cc.id) FILTER (WHERE cc.status = 'pendente') AS pendentes,
+                   (SELECT count(*) FROM tentativas t
+                    WHERE t.campanha_id = c.id AND t.inicio >= current_date) AS hoje
+            FROM campanhas c
+            LEFT JOIN campanha_contatos cc ON cc.campanha_id = c.id
+            GROUP BY c.id ORDER BY c.id DESC""").fetchall()
+    for c in campanhas:
+        c["motor"] = systemctl("is-active", servico(c)).stdout.strip()
+    return templates.TemplateResponse(request, "campanhas.html",
+                                      {"usuario": u, "campanhas": campanhas})
+
+
+@app.get("/campanhas/{cid}", response_class=HTMLResponse)
+def detalhe_campanha(request: Request, cid: int):
+    u = usuario_atual(request, "campanhas")
+    with db() as conn:
+        c = buscar_campanha(conn, cid)
+        numeros = conn.execute("""
+            SELECT count(*) AS total,
+                   count(*) FILTER (WHERE status = 'pendente')   AS pendentes,
+                   count(*) FILTER (WHERE status = 'discando')   AS discando,
+                   count(*) FILTER (WHERE status = 'finalizado') AS finalizados,
+                   count(*) FILTER (WHERE status = 'finalizado' AND
+                         split_part(coalesce(ultimo_resultado, ''), ' (', 1) NOT IN """
+                         + REAPROVEITAVEIS + """) AS reciclaveis
+            FROM campanha_contatos WHERE campanha_id = %s""", (cid,)).fetchone()
+        resultados = conn.execute("""
+            SELECT coalesce(split_part(ultimo_resultado, ' (', 1), 'ainda não discado') AS resultado,
+                   count(*) AS qtd
+            FROM campanha_contatos WHERE campanha_id = %s
+            GROUP BY 1 ORDER BY 2 DESC""", (cid,)).fetchall()
+        hoje = conn.execute("""SELECT count(*) AS n FROM tentativas
+                               WHERE campanha_id = %s AND inicio >= current_date""",
+                            (cid,)).fetchone()["n"]
+    motor = systemctl("is-active", servico(c)).stdout.strip()
+    arquivo_log = PASTA_LOGS / f"{servico(c)}.log"
+    log = "".join(deque(arquivo_log.open(encoding="utf-8", errors="replace"), 40)) \
+        if arquivo_log.exists() else ""
+    return templates.TemplateResponse(request, "campanha.html",
+        {"usuario": u, "c": c, "n": numeros, "resultados": resultados, "hoje": hoje,
+         "motor": motor, "log": log})
+
+
+@app.post("/campanhas/{cid}/acao")
+def acao_campanha(request: Request, cid: int, acao: str = Form(...)):
+    u = usuario_atual(request, "campanhas")
+    detalhe = {"campanha": cid}
+    with db() as conn:
+        c = buscar_campanha(conn, cid)
+        if acao == "iniciar":
+            conn.execute("UPDATE campanhas SET status = 'ativa' WHERE id = %s", (cid,))
+            systemctl("reset-failed", servico(c))
+            r = systemctl("start", servico(c))
+            detalhe["systemctl"] = r.returncode
+        elif acao == "pausar":
+            conn.execute("UPDATE campanhas SET status = 'pausada' WHERE id = %s", (cid,))
+        elif acao == "encerrar":
+            conn.execute("UPDATE campanhas SET status = 'encerrada' WHERE id = %s", (cid,))
+            systemctl("stop", servico(c))
+        elif acao == "reciclar":
+            detalhe["reciclados"] = conn.execute("SELECT reciclar_campanha(%s) AS n",
+                                                 (cid,)).fetchone()["n"]
+        else:
+            raise HTTPException(status_code=400)
+    auditar(u["id"], f"campanha_{acao}", request, **detalhe)
+    return RedirectResponse(f"/campanhas/{cid}", status_code=303)
+
+
+@app.get("/campanhas/{cid}/relatorio")
+def baixar_relatorio(request: Request, cid: int):
+    u = usuario_atual(request, "campanhas")
+    destino = Path(tempfile.mkdtemp()) / f"retorno_campanha_{cid}_{datetime.now():%Y%m%d_%H%M}.csv"
+    with db() as conn, conn.cursor() as cur:
+        c = buscar_campanha(conn, cid)
+        if c["origem"] == "lista":
+            relatorio_retorno.relatorio_lista(cur, c, destino)
+        else:
+            relatorio_retorno.relatorio_base(cur, c, destino)
+    auditar(u["id"], "relatorio_retorno", request, campanha=cid)
+    return FileResponse(destino, media_type="text/csv", filename=destino.name)
+
+
+@app.get("/campanhas/{cid}/exportar-ura")
+def baixar_exportacao_ura(request: Request, cid: int, arquivo: str = "relatorio", todos: int = 0):
+    u = usuario_atual(request, "campanhas")
+    try:
+        pipeline, relatorio = exportar_ura.exportar(cid, bool(todos))
+    except SystemExit as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    alvo = pipeline if arquivo == "pipeline" else relatorio
+    auditar(u["id"], "exportacao_ura", request, campanha=cid, arquivo=arquivo)
+    return FileResponse(alvo, media_type="text/csv", filename=alvo.name)
+
+
 # modulos ainda nao construidos: so verifica a permissao e mostra "em construcao"
 @app.get("/{modulo}", response_class=HTMLResponse)
 def em_construcao(request: Request, modulo: str):

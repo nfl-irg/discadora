@@ -1,0 +1,16 @@
+[Unit]
+Description=Discadora - campanha %i
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=%h/lab
+ExecStart=%h/lab/.venv/bin/python -u discadora.py --campanha %i
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:%h/lab/logs/discadora@%i.log
+StandardError=inherit
+
+[Install]
+WantedBy=default.target

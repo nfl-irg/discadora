@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block titulo %}{{ c.nome }}{% endblock %}
+{% block conteudo %}
+<style>
+  .numeros { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; }
+  .numero { background: #f5f6fa; border-radius: 8px; padding: 12px; }
+  .numero b { display: block; font-size: 1.6em; }
+  .numero span { font-size: .85em; color: #555; }
+  .acoes { display: flex; gap: 8px; flex-wrap: wrap; }
+  .acoes form { margin: 0; }
+  .sec { background: #fff; color: var(--azul); border: 1px solid var(--azul); }
+  table { border-collapse: collapse; }
+  td { padding: 4px 16px 4px 0; }
+  pre { background: #1d1f2c; color: #d8dbe8; padding: 12px; border-radius: 6px;
+        max-height: 320px; overflow: auto; font-size: .82em; white-space: pre-wrap; }
+</style>
+
+<p><a href="/campanhas">← Campanhas</a></p>
+<div class="cartao">
+  <h2>{{ c.nome }}</h2>
+  <p class="discreto">
+    #{{ c.id }} · {{ 'URA' if c.tipo == 'ura' else 'Operadores' }} ·
+    {{ 'Lista de cliente' if c.origem == 'lista' else 'Base própria' }} ·
+    situação <b>{{ c.status }}</b> · motor <b>{{ 'rodando' if motor == 'active' else 'parado' }}</b> ·
+    rodada {{ c.rodada }} de {{ c.max_tentativas }} ·
+    janela {{ c.janela_inicio.strftime('%H:%M') }}–{{ c.janela_fim.strftime('%H:%M') }}
+  </p>
+  <div class="acoes">
+    {% if c.status != 'ativa' or motor != 'active' %}
+    <form method="post" action="/campanhas/{{ c.id }}/acao"><input type="hidden" name="acao" value="iniciar">
+      <button>{{ 'Retomar' if c.status == 'pausada' else 'Iniciar' }}</button></form>
+    {% endif %}
+    {% if c.status == 'ativa' %}
+    <form method="post" action="/campanhas/{{ c.id }}/acao"><input type="hidden" name="acao" value="pausar">
+      <button class="sec">Pausar</button></form>
+    {% endif %}
+    {% if c.status != 'encerrada' %}
+    <form method="post" action="/campanhas/{{ c.id }}/acao"
+          onsubmit="return confirm('Encerrar a campanha e desligar o motor?')">
+      <input type="hidden" name="acao" value="encerrar"><button class="sec">Encerrar</button></form>
+    {% endif %}
+    {% if n.reciclaveis %}
+    <form method="post" action="/campanhas/{{ c.id }}/acao"
+          onsubmit="return confirm('Dar mais uma chamada a {{ n.reciclaveis }} contato(s) que não atenderam?')">
+      <input type="hidden" name="acao" value="reciclar">
+      <button class="sec">Reciclar ({{ n.reciclaveis }})</button></form>
+    {% endif %}
+  </div>
+</div>
+
+<div class="cartao">
+  <div class="numeros">
+    <div class="numero"><b>{{ n.total }}</b><span>contatos</span></div>
+    <div class="numero"><b>{{ n.pendentes }}</b><span>pendentes</span></div>
+    <div class="numero"><b>{{ n.discando }}</b><span>em ligação</span></div>
+    <div class="numero"><b>{{ n.finalizados }}</b><span>finalizados</span></div>
+    <div class="numero"><b>{{ hoje }}</b><span>ligações hoje</span></div>
+  </div>
+</div>
+
+<div class="cartao">
+  <h3>Resultados</h3>
+  <table>{% for r in resultados %}<tr><td>{{ r.resultado }}</td><td><b>{{ r.qtd }}</b></td></tr>{% endfor %}</table>
+</div>
+
+<div class="cartao">
+  <h3>Arquivos</h3>
+  <p><a href="/campanhas/{{ c.id }}/relatorio">Relatório de retorno (CSV)</a></p>
+  {% if c.tipo == 'ura' %}
+  <p><a href="/campanhas/{{ c.id }}/exportar-ura?arquivo=relatorio&todos=1">Relatório completo da URA (CSV)</a> ·
+     <a href="/campanhas/{{ c.id }}/exportar-ura?arquivo=pipeline">Arquivo para o pipeline f_ura (só finalizados)</a></p>
+  {% endif %}
+</div>
+
+<div class="cartao">
+  <h3>Log do motor</h3>
+  {% if log %}<pre>{{ log }}</pre>{% else %}<p class="discreto">O motor ainda não foi iniciado pelo painel.</p>{% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block titulo %}Campanhas{% endblock %}
+{% block conteudo %}
+<style>
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 8px 10px; border-bottom: 1px solid var(--borda); text-align: left; }
+  th { background: #f0f1f6; font-size: .85em; color: #444; }
+  .etq { padding: 2px 8px; border-radius: 10px; font-size: .85em; background: #eef0f6; }
+  .etq.ativa { background: #e3f4e8; color: #1b6b34; }
+  .etq.pausada { background: #fff4d6; color: #7a5a00; }
+  .etq.encerrada { background: #eee; color: #777; }
+</style>
+<div class="cartao">
+  <h2>Campanhas</h2>
+  <table>
+    <tr><th>#</th><th>Nome</th><th>Tipo</th><th>Origem</th><th>Situação</th><th>Motor</th>
+        <th>Contatos</th><th>Pendentes</th><th>Ligações hoje</th></tr>
+    {% for c in campanhas %}
+    <tr>
+      <td>{{ c.id }}</td>
+      <td><a href="/campanhas/{{ c.id }}">{{ c.nome }}</a></td>
+      <td>{{ 'URA' if c.tipo == 'ura' else 'Operadores' }}</td>
+      <td>{{ 'Lista de cliente' if c.origem == 'lista' else 'Base própria' }}</td>
+      <td><span class="etq {{ c.status }}">{{ c.status }}</span></td>
+      <td>{{ 'rodando' if c.motor == 'active' else 'parado' }}</td>
+      <td>{{ c.total }}</td><td>{{ c.pendentes }}</td><td>{{ c.hoje }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

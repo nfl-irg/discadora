@@ -21,12 +21,9 @@ def data(dt):
     return dt.strftime("%d/%m/%Y %H:%M") if dt else ""
 
 
-def main():
-    p = argparse.ArgumentParser(description="Exporta resultados de uma campanha de URA")
-    p.add_argument("--campanha", type=int, required=True)
-    p.add_argument("--todos", action="store_true",
-                   help="inclui contatos em andamento (padrao: so finalizados)")
-    a = p.parse_args()
+def exportar(campanha, todos=False):
+    """Gera os dois arquivos e devolve (arquivo_pipeline, arquivo_relatorio)."""
+    a = argparse.Namespace(campanha=campanha, todos=todos)
 
     with psycopg.connect("dbname=discadora", row_factory=dict_row) as conn, conn.cursor() as cur:
         cur.execute("SELECT * FROM campanhas WHERE id = %s", (a.campanha,))
@@ -92,7 +89,10 @@ def main():
             d = c["dados"] or {}
             resp = respostas.get(c["id"], {})
             atendeu = any(t["resultado"] in ATENDEU for t in ts)
-            ultimas = ts[-3:] + [None] * (3 - len(ts[-3:]))   # o formato tem 3 tentativas
+            # o formato tem 3 tentativas: se houve atendimento, a janela termina nele
+            idx_at = max((i for i, t in enumerate(ts) if t['resultado'] in ATENDEU), default=None)
+            janela = ts[max(0, idx_at - 2):idx_at + 1] if idx_at is not None else ts[-3:]
+            ultimas = janela + [None] * (3 - len(janela))
             if atendeu:
                 st_campanha = "success"
             elif c["status"] == "finalizado":
@@ -135,6 +135,16 @@ def main():
           f"{respondentes} respondentes")
     print(f"  pipeline : {arq_pipeline}")
     print(f"  relatorio: {arq_relatorio}")
+    return arq_pipeline, arq_relatorio
+
+
+def main():
+    p = argparse.ArgumentParser(description="Exporta resultados de uma campanha de URA")
+    p.add_argument("--campanha", type=int, required=True)
+    p.add_argument("--todos", action="store_true",
+                   help="inclui contatos em andamento (padrao: so finalizados)")
+    a = p.parse_args()
+    exportar(a.campanha, a.todos)
 
 
 if __name__ == "__main__":
