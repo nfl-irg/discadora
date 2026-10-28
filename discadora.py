@@ -129,7 +129,10 @@ async def finalizar(cli_id, resultado, causa_codigo, causa_texto):
         await cur.execute("SELECT * FROM regras_rediscagem WHERE resultado = %s", (resultado,))
         regra = await cur.fetchone() or {"finaliza": False, "intervalo": timedelta(hours=1),
                                          "conta_tentativa": True}
-        await cur.execute("SELECT count(*) AS n FROM tentativas WHERE campanha_contato_id = %s",
+        # teto de seguranca: conta so as falhas do nosso lado (que nao consomem tentativa)
+        await cur.execute("""SELECT count(*) AS n FROM tentativas t
+                             JOIN regras_rediscagem r ON r.resultado = t.resultado
+                             WHERE t.campanha_contato_id = %s AND NOT r.conta_tentativa""",
                           (contato["id"],))
         feitas = (await cur.fetchone())["n"]
         contadas = contato["tentativas"] + (1 if regra["conta_tentativa"] else 0)
@@ -138,7 +141,7 @@ async def finalizar(cli_id, resultado, causa_codigo, causa_texto):
             status, motivo = "finalizado", resultado
         elif contadas >= campanha["max_tentativas"]:
             status, motivo = "finalizado", f"{resultado} (tentativas esgotadas)"
-        elif feitas >= campanha["max_tentativas"] + LIMITE_ERROS_TECNICOS:
+        elif feitas >= LIMITE_ERROS_TECNICOS:
             status, motivo = "finalizado", "falha_tecnica"
         else:
             status, motivo = "pendente", resultado
