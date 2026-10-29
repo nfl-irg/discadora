@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block titulo %}Configurações · {{ c.nome }}{% endblock %}
+{% block conteudo %}
+<style>
+  .campos-grade { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; align-items: end; }
+  .campos-grade label, .bloco label { display: flex; flex-direction: column; gap: 4px; font-size: .85em; color: #555; }
+  .dias { display: flex; gap: 14px; flex-wrap: wrap; }
+  .dias label, label.check { display: flex; align-items: center; gap: 6px; }
+  .campo-tela { display: grid; grid-template-columns: 24px 160px 1fr; gap: 8px; align-items: center; margin: 4px 0; max-width: 560px; }
+  #saldo { font-size: 1.05em; font-weight: 600; color: var(--azul); }
+  textarea { font: inherit; padding: 8px; border: 1px solid var(--borda); border-radius: 6px; width: 100%; min-height: 110px; }
+  h3 { margin: 18px 0 8px; }
+</style>
+<p><a href="/campanhas/{{ c.id }}">← {{ c.nome }}</a></p>
+<form method="post" action="/campanhas/{{ c.id }}/configurar" id="form">
+
+<div class="cartao">
+  <h2>Configurações</h2>
+  <h3>Discagem</h3>
+  <div class="campos-grade">
+    <label>Nome <input name="nome" value="{{ c.nome }}" required></label>
+    <label>Ligar das <input type="time" name="janela_inicio" value="{{ c.janela_inicio.strftime('%H:%M') }}"></label>
+    <label>até <input type="time" name="janela_fim" value="{{ c.janela_fim.strftime('%H:%M') }}"></label>
+    <label>A partir de (data) <input type="date" name="data_inicio" value="{{ c.data_inicio or '' }}"></label>
+    <label>Até (data) <input type="date" name="data_fim" value="{{ c.data_fim or '' }}"></label>
+    <label>Chamadas por contato
+      <select name="tentativas">
+        {% for n in range(1, [3, c.max_tentativas]|max + 1) %}<option {% if n == c.max_tentativas %}selected{% endif %}>{{ n }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Quarentena (dias) <input type="number" name="quarentena" min="1" value="{{ c.quarentena_dias or '' }}" placeholder="sem quarentena"></label>
+    {% if c.tipo == 'ura' %}<label>Canais da URA <input type="number" name="max_canais" min="1" value="{{ c.max_canais or 60 }}"></label>{% endif %}
+  </div>
+  <p class="dias" style="margin-top:12px">
+    {% for n, nome in dias %}
+    <label><input type="checkbox" name="dias" value="{{ n }}" {% if n in (c.dias_semana or []) %}checked{% endif %}> {{ nome }}</label>
+    {% endfor %}
+  </p>
+</div>
+
+{% if tem_segmento %}
+<div class="cartao">
+  <h3>Segmento</h3>
+  {% include "_segmento.html" %}
+  <p class="discreto">O novo segmento vale para os próximos lotes.</p>
+  <label class="check"><input type="checkbox" name="trocar_pendentes" value="1">
+    Trocar agora os contatos ainda não discados por contatos do novo segmento</label>
+  <div class="campos-grade" style="margin-top:10px; max-width:240px">
+    <label>Tamanho do novo lote <input type="number" name="lote" value="5000" min="100" max="50000"></label>
+  </div>
+</div>
+{% endif %}
+
+{% if c.tipo == 'call' %}
+<div class="cartao">
+  <h3>Tela do operador</h3>
+  <p class="discreto">O telefone aparece sempre. Marque os outros campos e o nome que cada um mostra na tela.</p>
+  {% for campo, padrao in disponiveis %}
+  <div class="campo-tela">
+    <input type="checkbox" name="campos" value="{{ campo }}" {% if campo in escolhidos %}checked{% endif %}>
+    <span>{{ campo }}</span>
+    <input name="rotulo_{{ campo }}" value="{{ escolhidos.get(campo, padrao) }}">
+  </div>
+  {% endfor %}
+  <div class="bloco" style="margin-top:14px; max-width:560px">
+    <label>Link do questionário <input name="questionario_url" value="{{ c.questionario_url or '' }}" placeholder="https://..."></label>
+  </div>
+
+  <h3>Tabulação</h3>
+  <label class="check"><input type="checkbox" name="tabulacao_ativa" value="1" {% if c.tabulacao_ativa %}checked{% endif %}>
+    Pedir tabulação ao fim de cada ligação atendida</label>
+  <div class="bloco" style="margin-top:10px; max-width:560px">
+    <label>Opções, uma por linha. Termine com <b>*</b> a opção que bloqueia o telefone.
+      <textarea name="tabulacoes">{{ tab_texto }}</textarea></label>
+  </div>
+</div>
+{% endif %}
+
+<p><button id="salvar">Salvar configurações</button></p>
+</form>
+<script>
+  document.getElementById('form').onsubmit = () => { const b = document.getElementById('salvar'); b.disabled = true; b.textContent = 'Salvando…'; };
+</script>
+{% endblock %}

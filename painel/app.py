@@ -517,7 +517,7 @@ def regioes_base(forcar=False):
     if forcar or not _regioes["dados"] or _time.time() - _regioes["quando"] > 600:
         with psycopg.connect(mod_campanhas.DSN_MAILING, row_factory=dict_row) as m:
             _regioes["dados"] = m.execute("""
-                SELECT uf, coalesce(mesorregiao, '') AS mesorregiao, cidade, total, celulares
+                SELECT uf, coalesce(mesorregiao, '') AS mesorregiao, cidade, segmento, total, celulares
                 FROM vw_discadora_saldo ORDER BY uf, mesorregiao, cidade""").fetchall()
         _regioes["quando"] = _time.time()
     return _regioes["dados"]
@@ -533,43 +533,202 @@ def nova_campanha(request: Request):
 def nova_base(request: Request, atualizar: int = 0):
     u = usuario_atual(request, "campanhas")
     return templates.TemplateResponse(request, "nova_base.html",
-                                      {"usuario": u, "regioes": regioes_base(bool(atualizar))})
+                                      {"usuario": u, "regioes": regioes_base(bool(atualizar)), "atual": {}})
 
 
 @app.post("/campanhas/nova/base")
-def criar_campanha_base(request: Request, nome: str = Form(...), projeto: str = Form(...),
-                        tipo: str = Form("call"), uf: str = Form(...),
-                        mesorregiao: str = Form(""), cidade: str = Form(""),
-                        tipo_tel: str = Form(""), so_quentes: str = Form(""),
-                        quarentena: str = Form(""), tentativas: int = Form(1),
-                        lote: int = Form(5000), janela_inicio: str = Form("09:00"),
-                        janela_fim: str = Form("20:00"), max_canais: str = Form("")):
+async def criar_campanha_base(request: Request):
     u = usuario_atual(request, "campanhas")
+    f = await request.form()
+    tipo = f.get("tipo", "call")
+    tentativas = int(f.get("tentativas") or 1)
     if tipo not in ("call", "ura") or tentativas not in (1, 2, 3):
         raise HTTPException(status_code=400)
-    filtro = {"uf": uf.upper()}
-    if mesorregiao:
-        filtro["mesorregiao"] = mesorregiao
-    if cidade:
-        filtro["cidade"] = cidade
-    if tipo_tel in ("CELULAR", "FIXO"):
-        filtro["tipo"] = tipo_tel
-    if so_quentes:
-        filtro["so_quentes"] = True
-    dias = int(quarentena) if quarentena else None
-    # as funcoes do campanhas.py usam uma conexao propria (linhas como tuplas)
-    with psycopg.connect(mod_campanhas.DSN_DISCADORA) as conn:
-        cid = mod_campanhas.criar_campanha(conn, projeto.strip(), nome.strip(), filtro,
-                                           dias, tentativas)
-        conn.execute("""UPDATE campanhas SET tipo = %s, janela_inicio = %s, janela_fim = %s,
-                                             max_canais = %s
-                        WHERE id = %s""",
-                     (tipo, janela_inicio, janela_fim,
-                      int(max_canais) if (tipo == "ura" and max_canais) else None, cid))
-        conn.commit()
-        lote_id, sorteados, inseridos = mod_campanhas.sortear_lote(conn, cid, max(100, lote))
+    filtro = filtro_do_formulario(f)
+    dias = dias_do_formulario(f)
+    quarentena = int(f["quarentena"]) if f.get("quarentena") else None
+    lote = max(100, int(f.get("lote") or 5000))
+
+    def criar():
+        with psycopg.connect(mod_campanhas.DSN_DISCADORA) as conn:
+            cid = mod_campanhas.criar_campanha(conn, f["projeto"].strip(), f["nome"].strip(),
+                                               filtro, quarentena, tentativas)
+            conn.execute("""UPDATE campanhas
+                            SET tipo = %s, janela_inicio = %s, janela_fim = %s, max_canais = %s,
+                                dias_semana = %s, data_inicio = %s, data_fim = %s
+                            WHERE id = %s""",
+                         (tipo, f.get("janela_inicio") or "09:00", f.get("janela_fim") or "20:00",
+                          int(f["max_canais"]) if tipo == "ura" and f.get("max_canais") else None,
+                          dias, f.get("data_inicio") or None, f.get("data_fim") or None, cid))
+            conn.commit()
+            _, _, inseridos = mod_campanhas.sortear_lote(conn, cid, lote)
+        return cid, inseridos
+
+    # o sorteio leva alguns segundos: roda fora do laco principal para nao travar o painel
+    cid, inseridos = await run_in_threadpool(criar)
     auditar(u["id"], "campanha_criada", request, campanha=cid, origem="base",
             filtro=filtro, contatos=inseridos)
+    return RedirectResponse(f"/campanhas/{cid}", status_code=303)
+
+
+# ------------------------------ ligacoes em tempo real ------------------------------
+ROTULOS = {"atendida": "Atendida", "respondente": "Respondente", "caixa_postal": "Caixa postal",
+           "nao_atende": "Não atendeu", "recusou": "Rejeitada", "ocupado": "Ocupado",
+           "indisponivel": "Desligado/fora de área", "invalido": "Número inválido",
+           "falha_rede": "Falha de rede", "erro_originacao": "Erro técnico",
+           "abandono": "Abandono", "operador_desligou": "Operador desligou", "outro": "Outro"}
+
+
+@app.get("/campanhas/{cid:int}/tentativas")
+def tentativas_recentes(request: Request, cid: int):
+    usuario_atual(request, "campanhas")
+    with db() as conn:
+        linhas = conn.execute("""
+            SELECT t.inicio, t.telefone, coalesce(t.operador_login, t.operador) AS operador,
+                   t.resultado, t.atendida_em IS NOT NULL AS atendida, t.fim IS NULL AS andamento,
+                   t.conversa_s, t.sip_codigo, t.tabulacao
+            FROM tentativas t WHERE t.campanha_id = %s
+            ORDER BY t.id DESC LIMIT 50""", (cid,)).fetchall()
+    saida = []
+    for t in linhas:
+        if t["andamento"]:
+            situacao, classe = ("Em conversa" if t["atendida"] else "Discando"), "andamento"
+        else:
+            situacao = ROTULOS.get(t["resultado"], t["resultado"] or "—")
+            classe = "ok" if t["resultado"] in ("atendida", "respondente") else "nao"
+        saida.append({"hora": t["inicio"].strftime("%H:%M:%S"), "telefone": t["telefone"],
+                      "operador": t["operador"], "situacao": situacao, "classe": classe,
+                      "conversa": t["conversa_s"], "sip": t["sip_codigo"],
+                      "tabulacao": t["tabulacao"]})
+    return saida
+
+
+# ------------------------------ configuracoes da campanha ------------------------------
+import re as _re, unicodedata as _ud
+from starlette.concurrency import run_in_threadpool
+
+DIAS = [(1, "Seg"), (2, "Ter"), (3, "Qua"), (4, "Qui"), (5, "Sex"), (6, "Sáb"), (7, "Dom")]
+PERFIS_VALIDOS = {"misto", "misto_sem_quentes", "quentes", "respondentes", "atendentes", "impuros"}
+CAMPOS_BASE = [("cidade", "Cidade"), ("uf", "UF"), ("bairro", "Bairro"),
+               ("mesorregiao", "Mesorregião"), ("regional", "Regional"),
+               ("tipo", "Tipo de telefone"), ("sexo", "Sexo"), ("idade", "Faixa etária"),
+               ("escolaridade", "Escolaridade"), ("renda", "Renda"), ("ocupacao", "Ocupação")]
+
+
+def filtro_do_formulario(f):
+    filtro = {"uf": (f.get("uf") or "").upper()}
+    for chave in ("mesorregiao", "cidade"):
+        if f.get(chave):
+            filtro[chave] = f[chave]
+    if f.get("tipo_tel") in ("CELULAR", "FIXO"):
+        filtro["tipo"] = f["tipo_tel"]
+    if f.get("perfil") in PERFIS_VALIDOS and f["perfil"] != "misto":
+        filtro["perfil"] = f["perfil"]
+    return filtro
+
+
+def dias_do_formulario(f):
+    dias = {int(d) for d in f.getlist("dias") if d.isdigit() and 1 <= int(d) <= 7}
+    return sorted(dias) or list(range(1, 8))
+
+
+def codigo_de(nome):
+    t = _ud.normalize("NFKD", nome).encode("ascii", "ignore").decode().lower()
+    return _re.sub(r"[^a-z0-9]+", "_", t).strip("_") or "opcao"
+
+
+def campos_disponiveis(conn, c):
+    if c["origem"] == "lista" and c["lista_id"]:
+        cols = conn.execute("SELECT colunas FROM listas WHERE id = %s",
+                            (c["lista_id"],)).fetchone()["colunas"] or []
+        return [(col, col) for col in cols]
+    # campos padrao + qualquer outro campo presente nos contatos desta campanha
+    extras = [r["k"] for r in conn.execute("""
+        SELECT DISTINCT jsonb_object_keys(dados) AS k
+        FROM (SELECT dados FROM campanha_contatos WHERE campanha_id = %s LIMIT 200) s""",
+        (c["id"],)).fetchall()]
+    conhecidos = {k for k, _ in CAMPOS_BASE}
+    return CAMPOS_BASE + [(k, k) for k in sorted(extras) if k not in conhecidos]
+
+
+@app.get("/campanhas/{cid:int}/configurar", response_class=HTMLResponse)
+def configurar(request: Request, cid: int):
+    u = usuario_atual(request, "campanhas")
+    with db() as conn:
+        c = buscar_campanha(conn, cid)
+        disponiveis = campos_disponiveis(conn, c)
+    escolhidos = {x["campo"]: x.get("rotulo") or x["campo"] for x in c["campos_tela"]}
+    tab_texto = "\n".join(o["nome"] + (" *" if o.get("bloqueia") else "") for o in c["tabulacoes"])
+    tem_segmento = c["origem"] == "base" and "uf" in (c["filtro"] or {})
+    return templates.TemplateResponse(request, "configurar.html", {
+        "usuario": u, "c": c, "dias": DIAS, "disponiveis": disponiveis,
+        "escolhidos": escolhidos, "tab_texto": tab_texto, "tem_segmento": tem_segmento,
+        "regioes": regioes_base() if tem_segmento else [], "atual": c["filtro"] or {}})
+
+
+@app.post("/campanhas/{cid:int}/configurar")
+async def salvar_configuracao(request: Request, cid: int):
+    u = usuario_atual(request, "campanhas")
+    f = await request.form()
+
+    def salvar():
+        with db() as conn:
+            c = buscar_campanha(conn, cid)
+            conn.execute("""UPDATE campanhas
+                            SET nome = %s, dias_semana = %s, data_inicio = %s, data_fim = %s,
+                                janela_inicio = %s, janela_fim = %s, max_tentativas = %s,
+                                quarentena_dias = %s, max_canais = %s
+                            WHERE id = %s""",
+                         ((f.get("nome") or c["nome"]).strip(), dias_do_formulario(f),
+                          f.get("data_inicio") or None, f.get("data_fim") or None,
+                          f.get("janela_inicio") or c["janela_inicio"],
+                          f.get("janela_fim") or c["janela_fim"],
+                          int(f.get("tentativas") or c["max_tentativas"]),
+                          int(f["quarentena"]) if f.get("quarentena") else None,
+                          int(f["max_canais"]) if c["tipo"] == "ura" and f.get("max_canais") else c["max_canais"],
+                          cid))
+            trocados = None
+            if c["origem"] == "base" and "uf" in (c["filtro"] or {}) and f.get("uf"):
+                conn.execute("UPDATE campanhas SET filtro = %s WHERE id = %s",
+                             (Jsonb(filtro_do_formulario(f)), cid))
+                if f.get("trocar_pendentes"):
+                    trocados = conn.execute("""
+                        DELETE FROM campanha_contatos cc
+                        WHERE cc.campanha_id = %s AND cc.status = 'pendente' AND cc.tentativas = 0
+                          AND NOT EXISTS (SELECT 1 FROM tentativas t
+                                          WHERE t.campanha_contato_id = cc.id)""", (cid,)).rowcount
+            if c["tipo"] == "call":
+                disponiveis = campos_disponiveis(conn, c)
+                marcados = set(f.getlist("campos"))
+                campos = [{"campo": k, "rotulo": (f.get(f"rotulo_{k}") or k).strip()}
+                          for k, _ in disponiveis if k in marcados]
+                antigos = {o["nome"]: o["codigo"] for o in c["tabulacoes"]}
+                opcoes = []
+                for linha in (f.get("tabulacoes") or "").splitlines():
+                    nome = linha.strip()
+                    if not nome:
+                        continue
+                    bloqueia = nome.endswith("*")
+                    nome = nome.rstrip("*").strip()
+                    opcao = {"codigo": antigos.get(nome) or codigo_de(nome), "nome": nome}
+                    if bloqueia:
+                        opcao["bloqueia"] = True
+                    opcoes.append(opcao)
+                conn.execute("""UPDATE campanhas SET campos_tela = %s, questionario_url = %s,
+                                                     tabulacao_ativa = %s, tabulacoes = %s
+                                WHERE id = %s""",
+                             (Jsonb(campos), (f.get("questionario_url") or "").strip() or None,
+                              bool(f.get("tabulacao_ativa")), Jsonb(opcoes), cid))
+        sorteados = None
+        if trocados is not None:
+            with psycopg.connect(mod_campanhas.DSN_DISCADORA) as conn2:
+                _, _, sorteados = mod_campanhas.sortear_lote(conn2, cid,
+                                                             max(100, int(f.get("lote") or 5000)))
+        return trocados, sorteados
+
+    trocados, sorteados = await run_in_threadpool(salvar)
+    auditar(u["id"], "campanha_configurada", request, campanha=cid,
+            trocados=trocados, novos=sorteados)
     return RedirectResponse(f"/campanhas/{cid}", status_code=303)
 
 

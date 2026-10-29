@@ -46,9 +46,13 @@ async def carregar_campanha():
 
 
 def pode_discar():
-    hora = datetime.now().time()
+    momento = datetime.now()
+    hoje = momento.date()
     return (campanha["status"] == "ativa"
-            and campanha["janela_inicio"] <= hora <= campanha["janela_fim"])
+            and campanha["janela_inicio"] <= momento.time() <= campanha["janela_fim"]
+            and momento.isoweekday() in (campanha["dias_semana"] or range(1, 8))
+            and (campanha["data_inicio"] is None or hoje >= campanha["data_inicio"])
+            and (campanha["data_fim"] is None or hoje <= campanha["data_fim"]))
 
 
 async def proximo_contato():

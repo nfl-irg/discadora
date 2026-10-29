@@ -26,6 +26,8 @@
     janela {{ c.janela_inicio.strftime('%H:%M') }}–{{ c.janela_fim.strftime('%H:%M') }}
   </p>
   <div class="acoes">
+    <button type="button" id="ver-ao-vivo" class="sec">Ligações em tempo real</button>
+    <a href="/campanhas/{{ c.id }}/configurar"><button type="button" class="sec">Configurações</button></a>
     {% if c.status != 'ativa' or motor != 'active' %}
     <form method="post" action="/campanhas/{{ c.id }}/acao"><input type="hidden" name="acao" value="iniciar">
       <button>{{ 'Retomar' if c.status == 'pausada' else 'Iniciar' }}</button></form>
@@ -76,4 +78,56 @@
   <h3>Log do motor</h3>
   {% if log %}<pre>{{ log }}</pre>{% else %}<p class="discreto">O motor ainda não foi iniciado pelo painel.</p>{% endif %}
 </div>
+
+<dialog id="ao-vivo">
+  <div class="topo-vivo">
+    <h3>Ligações em tempo real</h3>
+    <span class="discreto">últimas 50 · atualiza a cada 2 s</span>
+    <button type="button" class="sec" id="fechar-ao-vivo">Fechar</button>
+  </div>
+  <table class="vivo">
+    <thead><tr><th>Hora</th><th>Telefone</th><th>Situação</th><th>Operador</th>
+               <th>Conversa</th><th>SIP</th><th>Tabulação</th></tr></thead>
+    <tbody id="vivo-corpo"></tbody>
+  </table>
+</dialog>
+<style>
+  dialog#ao-vivo { width: min(920px, 95vw); border: 0; border-radius: 10px; padding: 20px; }
+  dialog#ao-vivo::backdrop { background: rgba(20, 22, 40, .45); }
+  .topo-vivo { display: flex; gap: 12px; align-items: center; }
+  .topo-vivo h3 { margin: 0; }
+  .topo-vivo button { margin-left: auto; }
+  .vivo { width: 100%; border-collapse: collapse; font-size: .9em; margin-top: 12px; }
+  .vivo th, .vivo td { padding: 6px 8px; border-bottom: 1px solid var(--borda); text-align: left; }
+  .sit { padding: 2px 8px; border-radius: 10px; font-size: .85em; }
+  .sit.andamento { background: #e4ecfb; color: #1d4f9c; }
+  .sit.ok { background: #e3f4e8; color: #1b6b34; }
+  .sit.nao { background: #f1f1f4; color: #555; }
+</style>
+<script>
+(() => {
+  const dlg = document.getElementById('ao-vivo');
+  let timer = null;
+  async function carregar() {
+    const r = await fetch('/campanhas/{{ c.id }}/tentativas');
+    if (!r.ok) return;
+    const dados = await r.json();
+    const corpo = document.getElementById('vivo-corpo');
+    corpo.innerHTML = '';
+    const cel = v => { const td = document.createElement('td'); td.textContent = (v ?? '—'); return td; };
+    for (const t of dados) {
+      const tr = document.createElement('tr');
+      const sit = document.createElement('td');
+      const s = document.createElement('span'); s.className = 'sit ' + t.classe; s.textContent = t.situacao;
+      sit.append(s);
+      tr.append(cel(t.hora), cel(t.telefone), sit, cel(t.operador),
+                cel(t.conversa != null ? t.conversa + ' s' : null), cel(t.sip), cel(t.tabulacao));
+      corpo.append(tr);
+    }
+  }
+  document.getElementById('ver-ao-vivo').onclick = () => { dlg.showModal(); carregar(); timer = setInterval(carregar, 2000); };
+  document.getElementById('fechar-ao-vivo').onclick = () => dlg.close();
+  dlg.addEventListener('close', () => clearInterval(timer));   // para de atualizar ao fechar
+})();
+</script>
 {% endblock %}

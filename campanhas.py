@@ -6,6 +6,11 @@ from psycopg.types.json import Jsonb
 DSN_DISCADORA = "dbname=discadora"
 DSN_MAILING = "host=192.168.56.1 dbname=db_mailing user=discadora_leitura"
 FILTROS_PERMITIDOS = ("uf", "mesorregiao", "cidade", "tipo")
+PERFIS_SQL = {"quentes":           "c.segmento = 'quente'",
+              "respondentes":      "c.segmento = 'respondente'",
+              "atendentes":        "c.segmento = 'atendente'",
+              "impuros":           "c.segmento = 'impuro'",
+              "misto_sem_quentes": "c.segmento <> 'quente'"}
 
 
 def obter_projeto(conn, nome, cliente="Interno"):
@@ -43,6 +48,8 @@ def sortear_lote(conn, campanha_id, quantidade):
             params[campo] = filtro[campo]
     if filtro.get("so_quentes"):
         condicoes.append("c.is_quente")
+    if filtro.get("perfil") in PERFIS_SQL:
+        condicoes.append(PERFIS_SQL[filtro["perfil"]])
     if quarentena:
         condicoes.append("""NOT EXISTS (SELECT 1 FROM f_survey s
                                         WHERE s.telefone = c.telefone

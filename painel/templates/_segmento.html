@@ -1,0 +1,70 @@
+<div class="campos-grade">
+  <label>UF <select name="uf" id="uf" required></select></label>
+  <label>Mesorregião <select name="mesorregiao" id="meso"></select></label>
+  <label>Cidade <select name="cidade" id="cidade"></select></label>
+  <label>Tipo de telefone
+    <select name="tipo_tel" id="tipo_tel">
+      <option value="">Celular e fixo</option>
+      <option value="CELULAR">Só celular</option>
+      <option value="FIXO">Só fixo</option>
+    </select>
+  </label>
+  <label>Perfil dos contatos
+    <select name="perfil" id="perfil">
+      <option value="misto">Misto com quentes</option>
+      <option value="misto_sem_quentes">Misto sem quentes</option>
+      <option value="quentes">Quentes</option>
+      <option value="respondentes">Respondentes</option>
+      <option value="atendentes">Atendentes</option>
+      <option value="impuros">Impuros</option>
+    </select>
+  </label>
+</div>
+<p id="saldo"></p>
+<p class="discreto">Contagem da base, guardada por 10 minutos. Blocklist e quarentena são descontadas no sorteio.</p>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const regioes = {{ regioes|tojson }};
+  const atual = {{ atual|tojson }};
+  const PERFIL = { misto: s => true, misto_sem_quentes: s => s !== 'quente',
+                   quentes: s => s === 'quente', respondentes: s => s === 'respondente',
+                   atendentes: s => s === 'atendente', impuros: s => s === 'impuro' };
+  const unicos = lista => [...new Set(lista)].sort();
+  const uf = $('uf'), meso = $('meso'), cidade = $('cidade');
+
+  function preencher(sel, valores, comTodas) {
+    sel.innerHTML = '';
+    if (comTodas) { const o = document.createElement('option'); o.value = ''; o.textContent = 'Todas'; sel.append(o); }
+    for (const v of valores) { const o = document.createElement('option'); o.value = v; o.textContent = v || '(sem mesorregião)'; sel.append(o); }
+  }
+  function mostrarSaldo() {
+    const regra = PERFIL[$('perfil').value];
+    const f = regioes.filter(r => r.uf === uf.value
+                               && (!meso.value || r.mesorregiao === meso.value)
+                               && (!cidade.value || r.cidade === cidade.value)
+                               && regra(r.segmento));
+    const total = f.reduce((s, r) => s + r.total, 0), cel = f.reduce((s, r) => s + r.celulares, 0);
+    const tipo = $('tipo_tel').value;
+    const qtd = tipo === 'CELULAR' ? cel : tipo === 'FIXO' ? total - cel : total;
+    $('saldo').textContent = `${qtd.toLocaleString('pt-BR')} contatos na base com esse segmento`;
+  }
+  uf.onchange = () => { preencher(meso, unicos(regioes.filter(r => r.uf === uf.value).map(r => r.mesorregiao)), true); meso.onchange(); };
+  meso.onchange = () => {
+    preencher(cidade, unicos(regioes.filter(r => r.uf === uf.value && (!meso.value || r.mesorregiao === meso.value)).map(r => r.cidade)), true);
+    mostrarSaldo();
+  };
+  cidade.onchange = mostrarSaldo;
+  $('tipo_tel').onchange = mostrarSaldo;
+  $('perfil').onchange = mostrarSaldo;
+
+  // valores iniciais (na configuracao, os da campanha)
+  preencher(uf, unicos(regioes.map(r => r.uf)), false);
+  uf.value = atual.uf || 'PR'; uf.onchange();
+  if (atual.mesorregiao) { meso.value = atual.mesorregiao; meso.onchange(); }
+  if (atual.cidade) cidade.value = atual.cidade;
+  $('tipo_tel').value = atual.tipo || '';
+  $('perfil').value = atual.perfil || 'misto';
+  mostrarSaldo();
+})();
+</script>
