@@ -2,139 +2,185 @@
 {% block titulo %}Acompanhamento{% endblock %}
 {% block conteudo %}
 <style>
-  .topo-ac { display: flex; align-items: baseline; gap: 12px; }
-  .numeros { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
-  .numero { background: #f5f6fa; border-radius: 8px; padding: 12px; }
-  .numero b { display: block; font-size: 1.6em; }
-  .numero span { font-size: .85em; color: #555; }
-  table.ac { width: 100%; border-collapse: collapse; font-size: .92em; }
-  table.ac th, table.ac td { padding: 7px 9px; border-bottom: 1px solid var(--borda); text-align: left; }
-  table.ac th { background: #f0f1f6; font-size: .82em; color: #444; }
-  .est { padding: 2px 9px; border-radius: 10px; font-size: .85em; white-space: nowrap; }
-  .est.livre      { background: #e3f4e8; color: #1b6b34; }
-  .est.em_chamada, .est.tabulando { background: #fde8e1; color: #a8380f; }
-  .est.pausa      { background: #eef0f6; color: #3c4472; }
-  .est.fora       { background: #f4f4f4; color: #888; }
-  .alerta { color: #b00020; font-weight: 700; }
-  .barra { background: #eef0f6; border-radius: 4px; height: 10px; min-width: 120px; overflow: hidden; }
-  .barra i { display: block; height: 100%; background: var(--azul); }
-  .horas { display: flex; align-items: flex-end; gap: 6px; height: 160px; padding-top: 10px; }
-  .hora { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
-  .hora .t { width: 100%; background: #c9cee3; border-radius: 3px 3px 0 0; position: relative; }
-  .hora .a { width: 100%; background: var(--azul); position: absolute; bottom: 0; border-radius: 3px 3px 0 0; }
-  .hora small { font-size: .75em; color: #666; margin-top: 4px; }
-  .legenda i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin: 0 4px 0 12px; }
+  .ac-topo { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px 18px; margin-bottom: 18px; }
+  .ac-topo h2 { margin: 0; font-size: 1.6em; }
+  .aovivo { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--discreto); }
+  .aovivo i { width: 8px; height: 8px; border-radius: 50%; background: #1f7a45; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .kpi { background: #fff; border: 1px solid var(--borda); border-radius: 12px; padding: 16px 18px;
+         display: flex; flex-direction: column; gap: 6px; }
+  .kpi span { font-size: 12px; color: var(--discreto); }
+  .kpi b { font-size: 28px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  .camps { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }
+  .camp { flex: 1 1 340px; background: #fff; border: 1px solid var(--borda); border-radius: 12px;
+          padding: 14px 18px; display: flex; align-items: center; gap: 14px; color: inherit; text-decoration: none; }
+  .camp:hover { border-color: var(--laranja); color: inherit; }
+  .camp .tipo { font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+                padding: 4px 8px; border-radius: 6px; background: var(--azul-claro); color: var(--azul); }
+  .camp .info { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+  .camp .info b { font-size: 15px; }
+  .camp .info span { font-size: 13px; color: var(--discreto); }
+  .ac-corpo { display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start; }
+  .ac-corpo .cartao { margin: 0; }
+  .ac-ops { flex: 999 1 640px; min-width: 0; }
+  .ac-lado { flex: 1 1 320px; min-width: 0; display: flex; flex-direction: column; gap: 20px; }
+  .cab { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 10px; }
+  .cab h3 { margin: 0; font-size: 17px; }
+  .cab span { font-size: 13px; color: var(--discreto); }
+  .rolar { overflow-x: auto; }
+  table.ac { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 720px; }
+  table.ac th { text-align: left; font-size: 12px; font-weight: 600; color: var(--discreto);
+                padding: 10px; border-bottom: 1px solid var(--borda); }
+  table.ac td { padding: 12px 10px; border-bottom: 1px solid #eef0f3; font-variant-numeric: tabular-nums; }
+  table.ac td small { color: var(--discreto); margin-left: 6px; }
+  .pill { padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .pill.livre      { background: #e2f3e9; color: #1f6b3d; }
+  .pill.em_chamada { background: var(--laranja-claro); color: var(--laranja-texto); }
+  .pill.tabulando  { background: #efe8fa; color: #5e35a6; }
+  .pill.pausa      { background: #e9ebf2; color: #363f5c; }
+  .pill.fora       { background: #eff0f2; color: #5f6473; }
+  .pill.ativa      { background: #e2f3e9; color: #1f6b3d; }
+  .pill.pausada    { background: #fff4d6; color: #7a5a00; }
+  .alerta { color: #b3261e; font-weight: 700; }
+  .tronco { display: flex; flex-direction: column; gap: 7px; padding: 10px 0; }
+  .tronco + .tronco { border-top: 1px solid #eef0f3; }
+  .tronco .linha, .tronco .rot { display: flex; justify-content: space-between; gap: 8px; }
+  .tronco .rot { font-size: 12px; color: var(--discreto); }
+  .tronco .ok { font-size: 12px; font-weight: 600; color: #1f7a45; }
+  .tronco .off { font-size: 12px; font-weight: 600; color: var(--discreto); }
+  .barra { height: 8px; border-radius: 4px; background: #eef0f3; overflow: hidden; }
+  .barra i { display: block; height: 100%; border-radius: 4px; }
+  .legenda { display: flex; gap: 14px; font-size: 12px; color: var(--discreto); }
+  .legenda i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+  .horas { display: flex; align-items: flex-end; justify-content: space-between; gap: 4px; height: 160px; margin-top: 12px; }
+  .hora { flex: 1; max-width: 34px; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 6px; }
+  .hora .t { width: 100%; background: #c5d0e3; border-radius: 4px 4px 0 0; display: flex; align-items: flex-end; min-height: 2px; }
+  .hora .a { width: 100%; background: var(--azul); border-radius: 4px 4px 0 0; }
+  .hora small { font-size: 11px; color: var(--discreto); }
 </style>
 
-<div class="topo-ac"><h2>Acompanhamento</h2><span class="discreto" id="atualizado"></span></div>
-
-<div class="cartao"><h3>Campanhas em andamento</h3><div id="campanhas"></div></div>
-
-<div class="cartao"><h3>Hoje</h3><div class="numeros" id="totais"></div></div>
-
-<div class="cartao"><h3>Operadores</h3>
-  <table class="ac">
-    <thead><tr><th>Operador</th><th>Estado</th><th>Há</th><th>Campanha</th>
-      <th>Logado hoje</th><th>Em chamada</th><th>Em pausa</th><th>Disponível</th>
-      <th>Atendimentos</th><th>TMA</th></tr></thead>
-    <tbody id="operadores"></tbody>
-  </table>
+<div class="ac-topo">
+  <h2>Acompanhamento</h2>
+  <span class="aovivo"><i aria-hidden="true"></i><span id="atualizado">Carregando…</span></span>
 </div>
 
-<div class="cartao"><h3>Troncos</h3>
-  <table class="ac">
-    <thead><tr><th>Tronco</th><th>Canais em uso</th><th></th><th>Chamadas hoje</th><th></th></tr></thead>
-    <tbody id="troncos"></tbody>
-  </table>
-</div>
+<section class="kpis" id="totais" aria-label="Números de hoje"></section>
+<section class="camps" id="campanhas" aria-label="Campanhas em andamento"></section>
 
-<div class="cartao"><h3>Ligações por hora</h3>
-  <div class="legenda discreto"><i style="background:#c9cee3"></i>tentativas<i style="background:var(--azul)"></i>atendidas</div>
-  <div class="horas" id="horas"></div>
+<div class="ac-corpo">
+  <section class="cartao ac-ops">
+    <div class="cab"><h3>Operadores</h3><span id="resumo-ops"></span></div>
+    <div class="rolar">
+      <table class="ac">
+        <thead><tr><th>Operador</th><th>Estado</th><th>Há</th><th>Logado</th><th>Em chamada</th>
+                   <th>Em pausa</th><th>Atend.</th><th>TMA</th></tr></thead>
+        <tbody id="operadores"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <div class="ac-lado">
+    <section class="cartao">
+      <div class="cab"><h3>Troncos</h3></div>
+      <div id="troncos"></div>
+    </section>
+    <section class="cartao">
+      <div class="cab"><h3>Ligações por hora</h3></div>
+      <div class="legenda"><span><i style="background:#c5d0e3"></i>tentativas</span><span><i style="background:var(--azul)"></i>atendidas</span></div>
+      <div class="horas" id="horas" role="img" aria-label="Tentativas e atendidas por hora"></div>
+    </section>
+  </div>
 </div>
 
 <script>
 const $ = id => document.getElementById(id);
-const ESTADO = { livre: 'Disponível', em_chamada: 'Em chamada', tabulando: 'Tabulando',
-                 pausa: 'Em pausa', fora: 'Fora da fila' };
+const ESTADO = { livre: 'Disponível', em_chamada: 'Em chamada', tabulando: 'Tabulando', pausa: 'Em pausa', fora: 'Fora da fila' };
 const fmt = n => (n ?? 0).toLocaleString('pt-BR');
+const pct = (a, b) => b ? (100 * a / b).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + '%' : '—';
 function mmss(s) { if (s == null) return '—'; return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
-function hhmm(s) { s = s || 0; const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
-                   return h + 'h' + String(m).padStart(2, '0'); }
-function td(conteudo, classe) { const c = document.createElement('td');
-  if (conteudo instanceof Node) c.append(conteudo); else c.textContent = conteudo ?? '—';
-  if (classe) c.className = classe; return c; }
-function etiqueta(texto, classe) { const s = document.createElement('span'); s.className = 'est ' + classe; s.textContent = texto; return s; }
-function barra(valor, total) { const d = document.createElement('div'); d.className = 'barra';
-  const i = document.createElement('i'); i.style.width = Math.min(100, total ? 100 * valor / total : 0) + '%';
-  d.append(i); return d; }
+function hhmm(s) { s = s || 0; return Math.floor(s / 3600) + 'h' + String(Math.floor((s % 3600) / 60)).padStart(2, '0'); }
+function el(tag, cls, txt) { const e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; }
+function barra(valor, total, cor) {
+  const b = el('div', 'barra'), i = el('i');
+  i.style.width = Math.min(100, total ? 100 * valor / total : 0) + '%'; i.style.background = cor;
+  b.append(i); return b;
+}
 
 async function atualizar() {
   let d;
   try { const r = await fetch('/acompanhamento/dados'); if (r.redirected) { location.reload(); return; } d = await r.json(); }
   catch { return; }
-  $('atualizado').textContent = 'atualizado às ' + d.atualizado;
+  $('atualizado').textContent = 'Ao vivo · atualizado às ' + d.atualizado;
+
+  // numeros do dia
+  const t = d.totais;
+  const naFila = d.operadores.filter(o => o.estado !== 'fora').length;
+  const kpis = [
+    ['Tentativas', fmt(t.tentativas), 'hoje, todas as campanhas'],
+    ['Atendidas', fmt(t.atendidas), pct(t.atendidas, t.finalizadas) + ' das finalizadas'],
+    ['Em andamento', fmt(t.em_andamento), 'tocando ou em conversa'],
+    ['Chamadas curtas', pct(t.curtas, t.finalizadas), 'até 6 s, das finalizadas'],
+    ['Limite diário', pct(t.tentativas, d.limite), `${fmt(t.tentativas)} de ${fmt(d.limite)}`],
+    ['Operadores', `${naFila} / ${d.operadores.length}`, 'na fila / trabalharam hoje'],
+  ];
+  $('totais').replaceChildren(...kpis.map(([rot, val, nota]) => {
+    const k = el('div', 'kpi'); k.append(el('span', null, rot), el('b', null, val), el('span', null, nota)); return k;
+  }));
 
   // campanhas
-  const camp = $('campanhas'); camp.innerHTML = '';
-  if (!d.campanhas.length) camp.textContent = 'Nenhuma campanha ativa ou pausada.';
-  for (const c of d.campanhas) {
-    const p = document.createElement('p');
-    const a = document.createElement('a'); a.href = '/campanhas/' + c.id; a.textContent = c.nome;
-    p.append(a, ` · ${c.tipo === 'ura' ? 'URA' : 'Operadores'} · ${c.status} · motor ${c.motor === 'active' ? 'rodando' : 'parado'} · ${fmt(c.pendentes)} pendentes · ${fmt(c.hoje)} ligações hoje`);
-    camp.append(p);
-  }
-
-  // totais do dia
-  const t = d.totais;
-  const taxa = t.finalizadas ? (100 * t.atendidas / t.finalizadas).toFixed(1) + '%' : '—';
-  const curtas = t.finalizadas ? (100 * t.curtas / t.finalizadas).toFixed(1) + '%' : '—';
-  const limite = (100 * t.tentativas / d.limite).toFixed(1) + '%';
-  $('totais').innerHTML = '';
-  for (const [v, rot] of [[fmt(t.tentativas), 'tentativas'], [fmt(t.atendidas), 'atendidas'], [taxa, 'taxa de atendimento'],
-                          [fmt(t.em_andamento), 'em andamento agora'], [curtas, 'chamadas curtas (≤ 6 s)'],
-                          [limite, `do limite diário (${fmt(d.limite)})`]]) {
-    const n = document.createElement('div'); n.className = 'numero';
-    const b = document.createElement('b'); b.textContent = v;
-    const s = document.createElement('span'); s.textContent = rot;
-    n.append(b, s); $('totais').append(n);
-  }
+  const camps = d.campanhas.map(c => {
+    const a = el('a', 'camp'); a.href = '/campanhas/' + c.id;
+    const info = el('div', 'info');
+    info.append(el('b', null, c.nome),
+                el('span', null, `motor ${c.motor === 'active' ? 'rodando' : 'parado'} · ${fmt(c.pendentes)} pendentes · ${fmt(c.hoje)} ligações hoje`));
+    a.append(el('span', 'tipo', c.tipo === 'ura' ? 'URA' : 'Operadores'), info,
+             el('span', 'pill ' + c.status, c.status === 'ativa' ? 'Ativa' : 'Pausada'));
+    return a;
+  });
+  if (!camps.length) camps.push(el('div', 'camp discreto', 'Nenhuma campanha ativa ou pausada.'));
+  $('campanhas').replaceChildren(...camps);
 
   // operadores
-  const corpo = $('operadores'); corpo.innerHTML = '';
-  if (!d.operadores.length) { const tr = document.createElement('tr'); tr.append(td('Nenhum operador trabalhou hoje.')); corpo.append(tr); }
-  for (const o of d.operadores) {
-    const tr = document.createElement('tr');
-    const longa = o.estado === 'pausa' && o.segundos > 600;      // pausa acima de 10 minutos
-    const est = etiqueta(ESTADO[o.estado] + (o.pausa_agendada && o.estado !== 'pausa' ? ' · pausa agendada' : ''), o.estado);
-    tr.append(td(`${o.login} (${o.ramal})`), td(est), td(mmss(o.segundos), longa ? 'alerta' : ''),
-              td(o.campanha), td(hhmm(o.logado)), td(hhmm(o.em_chamada)), td(hhmm(o.pausa)),
-              td(hhmm(o.disponivel)), td(fmt(o.atendidas)), td(o.tma != null ? mmss(o.tma) : '—'));
-    corpo.append(tr);
-  }
+  const emPausa = d.operadores.filter(o => o.estado === 'pausa').length;
+  $('resumo-ops').textContent = `${naFila} na fila · ${emPausa} em pausa · pausa acima de 10 min em vermelho`;
+  const linhas = d.operadores.map(o => {
+    const tr = el('tr');
+    const op = el('td'); op.append(el('b', null, o.login), el('small', null, 'ramal ' + o.ramal + (o.campanha ? ' · ' + o.campanha : '')));
+    const est = el('td'); est.append(el('span', 'pill ' + o.estado,
+      ESTADO[o.estado] + (o.pausa_agendada && o.estado !== 'pausa' ? ' · pausa agendada' : '')));
+    const longa = o.estado === 'pausa' && o.segundos > 600;
+    tr.append(op, est, el('td', longa ? 'alerta' : null, mmss(o.segundos)), el('td', null, hhmm(o.logado)),
+              el('td', null, hhmm(o.em_chamada)), el('td', null, hhmm(o.pausa)), el('td', null, fmt(o.atendidas)),
+              el('td', null, o.tma != null ? mmss(o.tma) : '—'));
+    return tr;
+  });
+  if (!linhas.length) { const tr = el('tr'); const td = el('td', 'discreto', 'Nenhum operador trabalhou hoje.'); td.colSpan = 8; tr.append(td); linhas.push(tr); }
+  $('operadores').replaceChildren(...linhas);
 
   // troncos
-  const tr_ = $('troncos'); tr_.innerHTML = '';
-  for (const k of d.troncos) {
-    const tr = document.createElement('tr');
-    tr.append(td(k.nome + (k.ativo ? '' : ' (inativo)')), td(`${k.em_uso} de ${k.canais}`), td(barra(k.em_uso, k.canais)),
-              td(`${fmt(k.hoje)} de ${fmt(k.limite_diario)}`), td(barra(k.hoje, k.limite_diario)));
-    tr_.append(tr);
-  }
+  $('troncos').replaceChildren(...d.troncos.map(k => {
+    const b = el('div', 'tronco');
+    const linha = el('div', 'linha'); linha.append(el('b', null, k.nome), el('span', k.ativo ? 'ok' : 'off', k.ativo ? 'ativo' : 'inativo'));
+    const r1 = el('div', 'rot'); r1.append(el('span', null, 'Canais em uso'), el('span', null, `${k.em_uso} de ${k.canais}`));
+    const r2 = el('div', 'rot'); r2.append(el('span', null, 'Chamadas hoje / trava'), el('span', null, `${fmt(k.hoje)} de ${fmt(k.limite_diario)}`));
+    b.append(linha, r1, barra(k.em_uso, k.canais, 'var(--azul)'), r2, barra(k.hoje, k.limite_diario, 'var(--laranja)'));
+    return b;
+  }));
 
-  // ligacoes por hora
-  const horas = $('horas'); horas.innerHTML = '';
+  // ligacoes por hora: sempre das 8h as 20h (ou mais, se houver ligacoes fora disso)
+  const porHora = Object.fromEntries(d.por_hora.map(h => [h.hora, h]));
+  const horas = d.por_hora.map(h => h.hora);
+  const ini = Math.min(8, ...horas), fim = Math.max(20, ...horas);
   const maximo = Math.max(1, ...d.por_hora.map(h => h.tentativas));
-  for (const h of d.por_hora) {
-    const col = document.createElement('div'); col.className = 'hora';
-    col.title = `${h.hora}h: ${h.tentativas} tentativas, ${h.atendidas} atendidas`;
-    const tt = document.createElement('div'); tt.className = 't'; tt.style.height = (100 * h.tentativas / maximo) + '%';
-    const aa = document.createElement('div'); aa.className = 'a'; aa.style.height = (h.tentativas ? 100 * h.atendidas / h.tentativas : 0) + '%';
-    tt.append(aa);
-    const leg = document.createElement('small'); leg.textContent = h.hora + 'h';
-    col.append(tt, leg); horas.append(col);
+  const colunas = [];
+  for (let h = ini; h <= fim; h++) {
+    const v = porHora[h] || { tentativas: 0, atendidas: 0 };
+    const col = el('div', 'hora'); col.title = `${h}h: ${v.tentativas} tentativas, ${v.atendidas} atendidas`;
+    const tt = el('div', 't'); tt.style.height = (100 * v.tentativas / maximo) + '%';
+    const aa = el('div', 'a'); aa.style.height = (v.tentativas ? 100 * v.atendidas / v.tentativas : 0) + '%';
+    tt.append(aa); col.append(tt, el('small', null, h + 'h')); colunas.push(col);
   }
-  if (!d.por_hora.length) horas.textContent = 'Sem ligações hoje.';
+  $('horas').replaceChildren(...colunas);
 }
 
 atualizar();

@@ -2,31 +2,107 @@
 {% block titulo %}Campanhas{% endblock %}
 {% block conteudo %}
 <style>
-  table { width: 100%; border-collapse: collapse; }
-  th, td { padding: 8px 10px; border-bottom: 1px solid var(--borda); text-align: left; }
-  th { background: #f0f1f6; font-size: .85em; color: #444; }
-  .etq { padding: 2px 8px; border-radius: 10px; font-size: .85em; background: #eef0f6; }
-  .etq.ativa { background: #e3f4e8; color: #1b6b34; }
-  .etq.pausada { background: #fff4d6; color: #7a5a00; }
-  .etq.encerrada { background: #eee; color: #777; }
+  .topo { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 16px; }
+  .topo h2 { margin: 0; font-size: 1.6em; }
+  .topo a { margin-left: auto; }
+  .filtros { display: grid; grid-template-columns: 2fr repeat(3, minmax(150px, 1fr)); gap: 12px; align-items: end; }
+  @media (max-width: 800px) { .filtros { grid-template-columns: 1fr 1fr; } }
+  .filtros label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--discreto); font-weight: 600; }
+  .rolar { overflow-x: auto; }
+  table.lista { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 820px; }
+  table.lista th { text-align: left; font-size: 12px; font-weight: 600; color: var(--discreto); padding: 10px; border-bottom: 1px solid var(--borda); }
+  table.lista td { padding: 12px 10px; border-bottom: 1px solid #eef0f3; font-variant-numeric: tabular-nums; }
+  table.lista td a { font-weight: 600; text-decoration: none; }
+  table.lista td small { display: block; color: var(--discreto); font-size: 12px; margin-top: 2px; }
+  .pill { padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .pill.ativa { background: #e2f3e9; color: #1f6b3d; }
+  .pill.pausada { background: #fff4d6; color: #7a5a00; }
+  .pill.rascunho { background: var(--azul-claro); color: var(--azul); }
+  .pill.encerrada { background: #eff0f2; color: #5f6473; }
+  .motor { font-size: 12px; color: var(--discreto); }
+  .motor.on { color: #1f7a45; font-weight: 600; }
 </style>
-<div class="cartao">
+
+<div class="topo">
   <h2>Campanhas</h2>
-  <p><a href="/campanhas/nova"><button>Nova campanha</button></a></p>
-  <table>
-    <tr><th>#</th><th>Nome</th><th>Tipo</th><th>Origem</th><th>Situação</th><th>Motor</th>
-        <th>Contatos</th><th>Pendentes</th><th>Ligações hoje</th></tr>
-    {% for c in campanhas %}
-    <tr>
-      <td>{{ c.id }}</td>
-      <td><a href="/campanhas/{{ c.id }}">{{ c.nome }}</a></td>
-      <td>{{ 'URA' if c.tipo == 'ura' else 'Operadores' }}</td>
-      <td>{{ 'Lista de cliente' if c.origem == 'lista' else 'Base própria' }}</td>
-      <td><span class="etq {{ c.status }}">{{ c.status }}</span></td>
-      <td>{{ 'rodando' if c.motor == 'active' else 'parado' }}</td>
-      <td>{{ c.total }}</td><td>{{ c.pendentes }}</td><td>{{ c.hoje }}</td>
-    </tr>
-    {% endfor %}
-  </table>
+  <a href="/campanhas/nova"><button type="button">Nova campanha</button></a>
 </div>
+
+<div class="cartao">
+  <div class="filtros">
+    <label>Buscar pelo nome <input id="f-nome" type="search" placeholder="Ex.: CWB"></label>
+    <label>UF <select id="f-uf"><option value="">Todas</option></select></label>
+    <label>Cidade <select id="f-cidade"><option value="">Todas</option></select></label>
+    <label>Situação
+      <select id="f-status">
+        <option value="">Todas</option><option value="ativa">Ativa</option><option value="pausada">Pausada</option>
+        <option value="rascunho">Rascunho</option><option value="encerrada">Encerrada</option>
+      </select>
+    </label>
+  </div>
+</div>
+
+<div class="cartao">
+  <p class="discreto" id="contagem" style="margin-top:0"></p>
+  <div class="rolar">
+    <table class="lista">
+      <thead><tr><th>#</th><th>Campanha</th><th>Tipo</th><th>Situação</th><th>Motor</th>
+                 <th>Contatos</th><th>Pendentes</th><th>Ligações hoje</th></tr></thead>
+      <tbody>
+      {% for c in campanhas %}
+        <tr data-nome="{{ c.nome|lower }}" data-status="{{ c.status }}"
+            data-ufs="{{ c.ufs|join('|') }}" data-cidades="{{ c.cidades|join('|') }}">
+          <td class="discreto">{{ c.id }}</td>
+          <td><a href="/campanhas/{{ c.id }}">{{ c.nome }}</a>
+              <small>{{ 'Lista de cliente' if c.origem == 'lista' else 'Base própria' }}{% if c.cidades %} · {{ c.cidades[:3]|join(', ')|title }}{% if c.cidades|length > 3 %} e mais {{ c.cidades|length - 3 }}{% endif %}{% endif %}</small></td>
+          <td>{{ 'URA' if c.tipo == 'ura' else 'Operadores' }}</td>
+          <td><span class="pill {{ c.status }}">{{ c.status|capitalize }}</span></td>
+          <td><span class="motor {{ 'on' if c.motor == 'active' }}">{{ 'rodando' if c.motor == 'active' else 'parado' }}</span></td>
+          <td>{{ '{:,}'.format(c.total).replace(',', '.') }}</td>
+          <td>{{ '{:,}'.format(c.pendentes).replace(',', '.') }}</td>
+          <td>{{ '{:,}'.format(c.hoje).replace(',', '.') }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const linhas = [...document.querySelectorAll('tbody tr')];
+const separa = v => v ? v.split('|') : [];
+const fNome = document.getElementById('f-nome'), fUf = document.getElementById('f-uf');
+const fCidade = document.getElementById('f-cidade'), fStatus = document.getElementById('f-status');
+
+function opcoes(sel, valores) {
+  const atual = sel.value;
+  sel.length = 1;                                   // mantem so o "Todas"
+  for (const v of [...new Set(valores)].sort()) sel.add(new Option(v, v));
+  sel.value = valores.includes(atual) ? atual : '';
+}
+function preencherCidades() {
+  const doUf = linhas.filter(l => !fUf.value || separa(l.dataset.ufs).includes(fUf.value));
+  opcoes(fCidade, doUf.flatMap(l => separa(l.dataset.cidades)));
+}
+function filtrar() {
+  const termo = fNome.value.trim().toLowerCase();
+  let visiveis = 0;
+  for (const l of linhas) {
+    const ok = (!termo || l.dataset.nome.includes(termo))
+            && (!fUf.value || separa(l.dataset.ufs).includes(fUf.value))
+            && (!fCidade.value || separa(l.dataset.cidades).includes(fCidade.value))
+            && (!fStatus.value || l.dataset.status === fStatus.value);
+    l.hidden = !ok;
+    if (ok) visiveis++;
+  }
+  document.getElementById('contagem').textContent = `${visiveis} de ${linhas.length} campanhas`;
+}
+opcoes(fUf, linhas.flatMap(l => separa(l.dataset.ufs)));
+preencherCidades();
+fNome.oninput = filtrar;
+fUf.onchange = () => { preencherCidades(); filtrar(); };
+fCidade.onchange = filtrar;
+fStatus.onchange = filtrar;
+filtrar();
+</script>
 {% endblock %}

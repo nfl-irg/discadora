@@ -383,6 +383,16 @@ def lista_campanhas(request: Request):
             GROUP BY c.id ORDER BY c.id DESC""").fetchall()
     for c in campanhas:
         c["motor"] = systemctl("is-active", servico(c)).stdout.strip()
+    # UFs e cidades de cada campanha, para os filtros da lista
+    with db() as conn:
+        regioes = {r["campanha_id"]: r for r in conn.execute("""
+            SELECT campanha_id,
+                   array_remove(array_agg(DISTINCT upper(dados->>'uf')), NULL) AS ufs,
+                   array_remove(array_agg(DISTINCT upper(dados->>'cidade')), NULL) AS cidades
+            FROM campanha_contatos GROUP BY 1""").fetchall()}
+    for c in campanhas:
+        r = regioes.get(c["id"]) or {}
+        c["ufs"], c["cidades"] = r.get("ufs") or [], r.get("cidades") or []
     return templates.TemplateResponse(request, "campanhas.html",
                                       {"usuario": u, "campanhas": campanhas})
 
@@ -1077,3 +1087,7 @@ def em_construcao(request: Request, modulo: str):
     titulo = next(t for k, t, _ in MODULOS if k == modulo)
     return templates.TemplateResponse(request, "em_construcao.html",
                                       {"usuario": u, "titulo": titulo})
+
+
+# ordem do menu: Acompanhamento primeiro, os demais na ordem original
+MODULOS = sorted(MODULOS, key=lambda m: m[0] != "acompanhamento")

@@ -3,41 +3,103 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{% block titulo %}Painel{% endblock %} · Discadora</title>
+<title>{% block titulo %}Painel{% endblock %} · Discadora IRG</title>
+<link rel="icon" type="image/png" href="/static/logo-irg-azul.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
 <style>
-  :root { --azul: #232657; --laranja: #e74e1c; --fundo: #f5f6fa; --borda: #dde0ea; }
+  :root {
+    color-scheme: light;
+    --azul: #1a3563;        /* azul IRG: menus, botoes principais */
+    --azul-escuro: #0f2244;
+    --azul-medio: #24467f;
+    --azul-claro: #e6ecf5;
+    --laranja: #f6673b;     /* laranja IRG: destaques, nunca com texto branco em cima */
+    --laranja-texto: #a8401c;
+    --laranja-claro: #fee6dd;
+    --fundo: #f4f5f7;
+    --borda: #e3e5ea;
+    --texto: #171a23;
+    --discreto: #5b6070;
+  }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
-  body { margin: 0; font-family: system-ui, sans-serif; background: var(--fundo); color: #1d1f2c; }
-  header { background: var(--azul); color: #fff; padding: 12px 20px;
-           display: flex; gap: 20px; align-items: center; flex-wrap: wrap; }
-  header a { color: #fff; text-decoration: none; opacity: .85; }
-  header a:hover { opacity: 1; border-bottom: 2px solid var(--laranja); }
-  header .marca { font-weight: 700; margin-right: auto; }
-  main { max-width: 1100px; margin: 24px auto; padding: 0 16px; }
-  .cartao { background: #fff; border: 1px solid var(--borda); border-radius: 8px;
+  body { margin: 0; font-family: Inter, system-ui, sans-serif; background: var(--fundo); color: var(--texto); }
+  a { color: var(--azul); }
+  a:hover { color: var(--azul-escuro); }
+  h2 { font-size: 1.35em; letter-spacing: -0.01em; margin-top: 0; }
+  h3 { font-size: 1.05em; }
+
+  /* estrutura: menu lateral + conteudo (no celular, o menu vai para cima) */
+  .estrutura { display: flex; flex-wrap: wrap; min-height: 100vh; }
+  .menu { flex: 1 1 220px; background: var(--azul); color: #d3dcec; padding: 22px 14px;
+          display: flex; flex-direction: column; gap: 4px; }
+  .menu .marca { display: flex; flex-direction: column; gap: 10px; padding: 4px 10px 24px; text-decoration: none; }
+  .menu .marca img { width: 112px; height: auto; display: block; }
+  .menu .marca span { font-size: 11px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: #afc0dd; }
+  .menu a.item { color: #d3dcec; text-decoration: none; padding: 11px 12px; border-radius: 8px; font-size: 14px; }
+  .menu a.item:hover { background: var(--azul-medio); color: #fff; }
+  .menu a.item.ativo { background: var(--azul-medio); color: #fff; font-weight: 600;
+                       box-shadow: inset 3px 0 0 var(--laranja); }
+  .menu .usuario { margin-top: auto; padding: 18px 12px 0; border-top: 1px solid #2d4c80;
+                   display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+  .menu .usuario b { color: #fff; }
+  .menu .usuario small { color: #afc0dd; }
+  .menu .usuario a { color: #d3dcec; font-size: 13px; margin-top: 6px; }
+  .menu .usuario a:hover { color: #fff; }
+  .conteudo { flex: 999 1 560px; min-width: 0; }
+  @media (min-width: 900px) {
+    /* tela larga: o menu fica parado e so o conteudo rola */
+    .estrutura { height: 100vh; flex-wrap: nowrap; }
+    .menu { flex: 0 0 230px; overflow-y: auto; }
+    .conteudo { height: 100vh; overflow-y: auto; }
+  }
+  main { max-width: 1640px; margin: 0 auto; padding: 28px 32px 40px; }
+  @media (max-width: 600px) { main { padding: 20px 16px 32px; } }
+
+  /* componentes usados pelas paginas */
+  .cartao { background: #fff; border: 1px solid var(--borda); border-radius: 12px;
             padding: 20px; margin-bottom: 16px; }
   .grade { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }
-  .grade a { display: block; background: #fff; border: 1px solid var(--borda); border-radius: 8px;
+  .grade a { display: block; background: #fff; border: 1px solid var(--borda); border-radius: 12px;
              padding: 20px; color: inherit; text-decoration: none; font-weight: 600; }
   .grade a:hover { border-color: var(--laranja); }
-  input, select, button { font: inherit; padding: 8px 10px; border: 1px solid var(--borda);
-                          border-radius: 6px; }
-  button { background: var(--azul); color: #fff; border: 0; cursor: pointer; }
-  button:hover { background: var(--laranja); }
-  .erro { color: #b00020; }
-  .discreto { color: #666; font-size: .9em; }
+  input, select, button, textarea { font: inherit; padding: 9px 11px; border: 1px solid #c7ccda;
+                                    border-radius: 8px;
+                                    background: #fff; color: var(--texto); }
+  input:focus, select:focus, textarea:focus { outline: 2px solid var(--azul-claro); border-color: var(--azul); }
+  button { background: var(--azul); color: #fff; border: 1px solid var(--azul); cursor: pointer;
+           font-weight: 600; min-height: 40px; padding: 0 16px; }
+  button:hover { background: var(--azul-escuro); }
+  button:disabled { opacity: .55; cursor: default; }
+  .erro { color: #b3261e; }
+  .discreto { color: var(--discreto); font-size: .9em; }
+  .mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
 </style>
 </head>
 <body>
 {% if usuario %}
-<header>
-  <a class="marca" href="/">Discadora</a>
-  {% for chave, titulo, url in usuario.modulos %}<a href="{{ url }}">{{ titulo }}</a>{% endfor %}
-  <span class="discreto" style="color:#ccd">{{ usuario.nome }} · {{ usuario.perfil }}</span>
-  <a href="/sair">Sair</a>
-</header>
+{% set nomes_perfil = {"admin": "Administrador", "supervisor": "Supervisor", "monitoria": "Monitoria",
+                       "operador": "Operador", "cliente": "Cliente"} %}
+<div class="estrutura">
+  <nav class="menu" aria-label="Menu principal">
+    <a class="marca" href="/">
+      <img src="/static/logo-irg-branco.png" alt="IRG Pesquisas">
+      <span>Discadora</span>
+    </a>
+    {% for chave, titulo, url in usuario.modulos %}
+    <a class="item {% if request.url.path.startswith(url) %}ativo{% endif %}" href="{{ url }}">{{ titulo }}</a>
+    {% endfor %}
+    <div class="usuario">
+      <b>{{ usuario.nome }}</b>
+      <small>{{ nomes_perfil.get(usuario.perfil, usuario.perfil) }}</small>
+      <a href="/sair">Sair</a>
+    </div>
+  </nav>
+  <div class="conteudo"><main>{% block conteudo %}{% endblock %}</main></div>
+</div>
+{% else %}
+<main>{% block conteudo_publico %}{{ self.conteudo() }}{% endblock %}</main>
 {% endif %}
-<main>{% block conteudo %}{% endblock %}</main>
 </body>
 </html>
