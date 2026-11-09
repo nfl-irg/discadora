@@ -18,7 +18,7 @@ DSN = "dbname=discadora"
 PERMISSOES = {
     "admin":      {"campanhas", "audios", "relatorios", "acompanhamento", "operador", "usuarios"},
     "supervisor": {"campanhas", "audios", "relatorios", "acompanhamento"},
-    "monitoria":  {"audios"},
+    "monitoria":  {"audios", "acompanhamento"},
     "operador":   {"operador"},
     "cliente":    {"relatorios"},
 }
@@ -975,6 +975,97 @@ def ouvir_audio_roteiro(request: Request, cid: int, caminho: str):
     if not arquivo.exists():
         raise HTTPException(status_code=404)
     return FileResponse(arquivo, media_type="audio/wav")
+
+
+# ------------------------------ acompanhamento ------------------------------
+@app.get("/acompanhamento", response_class=HTMLResponse)
+def acompanhamento(request: Request):
+    u = usuario_atual(request, "acompanhamento")
+    return templates.TemplateResponse(request, "acompanhamento.html", {"usuario": u})
+
+
+def _tempo(estado=None):
+    """Soma, em segundos, o tempo de hoje num estado (ou em todos)."""
+    filtro = f" FILTER (WHERE estado = '{estado}')" if estado else ""
+    return (f"coalesce(sum(extract(epoch FROM coalesce(fim, now()) - "
+            f"greatest(inicio, current_date::timestamptz))){filtro}, 0)::int")
+
+
+@app.get("/acompanhamento/dados")
+def acompanhamento_dados(request: Request):
+    usuario_atual(request, "acompanhamento")
+    with db() as conn:
+        agora_ops = conn.execute("""
+            SELECT o.login, o.ramal, o.estado, o.pausa_solicitada,
+                   extract(epoch FROM now() - o.estado_desde)::int AS segundos,
+                   c.nome AS campanha
+            FROM operadores_online o LEFT JOIN campanhas c ON c.id = o.campanha_id""").fetchall()
+        tempos = {r["login"]: r for r in conn.execute(f"""
+            SELECT login, max(ramal) AS ramal,
+                   {_tempo()} AS total, {_tempo('pausa')} AS pausa,
+                   {_tempo('em_chamada')} AS em_chamada, {_tempo('tabulando')} AS tabulando,
+                   {_tempo('livre')} AS livre
+            FROM operador_estados
+            WHERE coalesce(fim, now()) >= current_date
+            GROUP BY login""").fetchall()}
+        atend = {r["login"]: r for r in conn.execute("""
+            SELECT operador_login AS login,
+                   count(*) FILTER (WHERE atendida_em IS NOT NULL) AS atendidas,
+                   round(avg(conversa_s) FILTER (WHERE atendida_em IS NOT NULL))::int AS tma
+            FROM tentativas
+            WHERE inicio >= current_date AND operador_login IS NOT NULL
+            GROUP BY 1""").fetchall()}
+        totais = conn.execute("""
+            SELECT count(*) AS tentativas,
+                   count(*) FILTER (WHERE atendida_em IS NOT NULL) AS atendidas,
+                   count(*) FILTER (WHERE fim IS NULL) AS em_andamento,
+                   count(*) FILTER (WHERE fim IS NOT NULL) AS finalizadas,
+                   count(*) FILTER (WHERE fim IS NOT NULL
+                                    AND fim - inicio <= interval '6 seconds') AS curtas
+            FROM tentativas WHERE inicio >= current_date""").fetchone()
+        limite = int(conn.execute("""SELECT valor FROM config
+                                     WHERE chave = 'limite_diario_empresa'""").fetchone()["valor"])
+        por_hora = conn.execute("""
+            SELECT extract(hour FROM inicio)::int AS hora, count(*) AS tentativas,
+                   count(*) FILTER (WHERE atendida_em IS NOT NULL) AS atendidas
+            FROM tentativas WHERE inicio >= current_date
+            GROUP BY 1 ORDER BY 1""").fetchall()
+        troncos = conn.execute("""
+            SELECT t.nome, t.ativo, t.canais, t.limite_diario,
+                   (SELECT count(*) FROM canais_em_uso c WHERE c.tronco_id = t.id) AS em_uso,
+                   (SELECT count(*) FROM tentativas x
+                    WHERE x.tronco_id = t.id AND x.inicio >= current_date) AS hoje
+            FROM troncos t ORDER BY t.prioridade, t.id""").fetchall()
+        campanhas_ativas = conn.execute("""
+            SELECT c.id, c.nome, c.tipo, c.status,
+                   count(cc.id) FILTER (WHERE cc.status = 'pendente') AS pendentes,
+                   (SELECT count(*) FROM tentativas t
+                    WHERE t.campanha_id = c.id AND t.inicio >= current_date) AS hoje
+            FROM campanhas c LEFT JOIN campanha_contatos cc ON cc.campanha_id = c.id
+            WHERE c.status IN ('ativa', 'pausada')
+            GROUP BY c.id ORDER BY c.id DESC""").fetchall()
+
+    def linha(login, ramal, estado, segundos, campanha, pausa_agendada):
+        tp, at = tempos.get(login) or {}, atend.get(login) or {}
+        return {"login": login or "(sem login)", "ramal": ramal, "estado": estado,
+                "segundos": segundos, "campanha": campanha, "pausa_agendada": pausa_agendada,
+                "logado": tp.get("total", 0),
+                "em_chamada": tp.get("em_chamada", 0) + tp.get("tabulando", 0),
+                "pausa": tp.get("pausa", 0), "disponivel": tp.get("livre", 0),
+                "atendidas": at.get("atendidas", 0), "tma": at.get("tma")}
+
+    operadores = [linha(o["login"], o["ramal"], o["estado"], o["segundos"], o["campanha"],
+                        o["pausa_solicitada"]) for o in agora_ops]
+    online = {o["login"] for o in agora_ops}
+    for login, tp in tempos.items():             # trabalharam hoje, mas sairam da fila
+        if login not in online:
+            operadores.append(linha(login, tp["ramal"], "fora", None, None, False))
+    operadores.sort(key=lambda o: (len(o["login"]), o["login"]))
+    for c in campanhas_ativas:
+        c["motor"] = systemctl("is-active", servico(c)).stdout.strip()
+    return {"operadores": operadores, "totais": totais, "limite": limite,
+            "por_hora": por_hora, "troncos": troncos, "campanhas": campanhas_ativas,
+            "atualizado": datetime.now().strftime("%H:%M:%S")}
 
 
 # modulos ainda nao construidos: so verifica a permissao e mostra "em construcao"

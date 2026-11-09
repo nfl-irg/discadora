@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% block titulo %}Acompanhamento{% endblock %}
+{% block conteudo %}
+<style>
+  .topo-ac { display: flex; align-items: baseline; gap: 12px; }
+  .numeros { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+  .numero { background: #f5f6fa; border-radius: 8px; padding: 12px; }
+  .numero b { display: block; font-size: 1.6em; }
+  .numero span { font-size: .85em; color: #555; }
+  table.ac { width: 100%; border-collapse: collapse; font-size: .92em; }
+  table.ac th, table.ac td { padding: 7px 9px; border-bottom: 1px solid var(--borda); text-align: left; }
+  table.ac th { background: #f0f1f6; font-size: .82em; color: #444; }
+  .est { padding: 2px 9px; border-radius: 10px; font-size: .85em; white-space: nowrap; }
+  .est.livre      { background: #e3f4e8; color: #1b6b34; }
+  .est.em_chamada, .est.tabulando { background: #fde8e1; color: #a8380f; }
+  .est.pausa      { background: #eef0f6; color: #3c4472; }
+  .est.fora       { background: #f4f4f4; color: #888; }
+  .alerta { color: #b00020; font-weight: 700; }
+  .barra { background: #eef0f6; border-radius: 4px; height: 10px; min-width: 120px; overflow: hidden; }
+  .barra i { display: block; height: 100%; background: var(--azul); }
+  .horas { display: flex; align-items: flex-end; gap: 6px; height: 160px; padding-top: 10px; }
+  .hora { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
+  .hora .t { width: 100%; background: #c9cee3; border-radius: 3px 3px 0 0; position: relative; }
+  .hora .a { width: 100%; background: var(--azul); position: absolute; bottom: 0; border-radius: 3px 3px 0 0; }
+  .hora small { font-size: .75em; color: #666; margin-top: 4px; }
+  .legenda i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin: 0 4px 0 12px; }
+</style>
+
+<div class="topo-ac"><h2>Acompanhamento</h2><span class="discreto" id="atualizado"></span></div>
+
+<div class="cartao"><h3>Campanhas em andamento</h3><div id="campanhas"></div></div>
+
+<div class="cartao"><h3>Hoje</h3><div class="numeros" id="totais"></div></div>
+
+<div class="cartao"><h3>Operadores</h3>
+  <table class="ac">
+    <thead><tr><th>Operador</th><th>Estado</th><th>Há</th><th>Campanha</th>
+      <th>Logado hoje</th><th>Em chamada</th><th>Em pausa</th><th>Disponível</th>
+      <th>Atendimentos</th><th>TMA</th></tr></thead>
+    <tbody id="operadores"></tbody>
+  </table>
+</div>
+
+<div class="cartao"><h3>Troncos</h3>
+  <table class="ac">
+    <thead><tr><th>Tronco</th><th>Canais em uso</th><th></th><th>Chamadas hoje</th><th></th></tr></thead>
+    <tbody id="troncos"></tbody>
+  </table>
+</div>
+
+<div class="cartao"><h3>Ligações por hora</h3>
+  <div class="legenda discreto"><i style="background:#c9cee3"></i>tentativas<i style="background:var(--azul)"></i>atendidas</div>
+  <div class="horas" id="horas"></div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const ESTADO = { livre: 'Disponível', em_chamada: 'Em chamada', tabulando: 'Tabulando',
+                 pausa: 'Em pausa', fora: 'Fora da fila' };
+const fmt = n => (n ?? 0).toLocaleString('pt-BR');
+function mmss(s) { if (s == null) return '—'; return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
+function hhmm(s) { s = s || 0; const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+                   return h + 'h' + String(m).padStart(2, '0'); }
+function td(conteudo, classe) { const c = document.createElement('td');
+  if (conteudo instanceof Node) c.append(conteudo); else c.textContent = conteudo ?? '—';
+  if (classe) c.className = classe; return c; }
+function etiqueta(texto, classe) { const s = document.createElement('span'); s.className = 'est ' + classe; s.textContent = texto; return s; }
+function barra(valor, total) { const d = document.createElement('div'); d.className = 'barra';
+  const i = document.createElement('i'); i.style.width = Math.min(100, total ? 100 * valor / total : 0) + '%';
+  d.append(i); return d; }
+
+async function atualizar() {
+  let d;
+  try { const r = await fetch('/acompanhamento/dados'); if (r.redirected) { location.reload(); return; } d = await r.json(); }
+  catch { return; }
+  $('atualizado').textContent = 'atualizado às ' + d.atualizado;
+
+  // campanhas
+  const camp = $('campanhas'); camp.innerHTML = '';
+  if (!d.campanhas.length) camp.textContent = 'Nenhuma campanha ativa ou pausada.';
+  for (const c of d.campanhas) {
+    const p = document.createElement('p');
+    const a = document.createElement('a'); a.href = '/campanhas/' + c.id; a.textContent = c.nome;
+    p.append(a, ` · ${c.tipo === 'ura' ? 'URA' : 'Operadores'} · ${c.status} · motor ${c.motor === 'active' ? 'rodando' : 'parado'} · ${fmt(c.pendentes)} pendentes · ${fmt(c.hoje)} ligações hoje`);
+    camp.append(p);
+  }
+
+  // totais do dia
+  const t = d.totais;
+  const taxa = t.finalizadas ? (100 * t.atendidas / t.finalizadas).toFixed(1) + '%' : '—';
+  const curtas = t.finalizadas ? (100 * t.curtas / t.finalizadas).toFixed(1) + '%' : '—';
+  const limite = (100 * t.tentativas / d.limite).toFixed(1) + '%';
+  $('totais').innerHTML = '';
+  for (const [v, rot] of [[fmt(t.tentativas), 'tentativas'], [fmt(t.atendidas), 'atendidas'], [taxa, 'taxa de atendimento'],
+                          [fmt(t.em_andamento), 'em andamento agora'], [curtas, 'chamadas curtas (≤ 6 s)'],
+                          [limite, `do limite diário (${fmt(d.limite)})`]]) {
+    const n = document.createElement('div'); n.className = 'numero';
+    const b = document.createElement('b'); b.textContent = v;
+    const s = document.createElement('span'); s.textContent = rot;
+    n.append(b, s); $('totais').append(n);
+  }
+
+  // operadores
+  const corpo = $('operadores'); corpo.innerHTML = '';
+  if (!d.operadores.length) { const tr = document.createElement('tr'); tr.append(td('Nenhum operador trabalhou hoje.')); corpo.append(tr); }
+  for (const o of d.operadores) {
+    const tr = document.createElement('tr');
+    const longa = o.estado === 'pausa' && o.segundos > 600;      // pausa acima de 10 minutos
+    const est = etiqueta(ESTADO[o.estado] + (o.pausa_agendada && o.estado !== 'pausa' ? ' · pausa agendada' : ''), o.estado);
+    tr.append(td(`${o.login} (${o.ramal})`), td(est), td(mmss(o.segundos), longa ? 'alerta' : ''),
+              td(o.campanha), td(hhmm(o.logado)), td(hhmm(o.em_chamada)), td(hhmm(o.pausa)),
+              td(hhmm(o.disponivel)), td(fmt(o.atendidas)), td(o.tma != null ? mmss(o.tma) : '—'));
+    corpo.append(tr);
+  }
+
+  // troncos
+  const tr_ = $('troncos'); tr_.innerHTML = '';
+  for (const k of d.troncos) {
+    const tr = document.createElement('tr');
+    tr.append(td(k.nome + (k.ativo ? '' : ' (inativo)')), td(`${k.em_uso} de ${k.canais}`), td(barra(k.em_uso, k.canais)),
+              td(`${fmt(k.hoje)} de ${fmt(k.limite_diario)}`), td(barra(k.hoje, k.limite_diario)));
+    tr_.append(tr);
+  }
+
+  // ligacoes por hora
+  const horas = $('horas'); horas.innerHTML = '';
+  const maximo = Math.max(1, ...d.por_hora.map(h => h.tentativas));
+  for (const h of d.por_hora) {
+    const col = document.createElement('div'); col.className = 'hora';
+    col.title = `${h.hora}h: ${h.tentativas} tentativas, ${h.atendidas} atendidas`;
+    const tt = document.createElement('div'); tt.className = 't'; tt.style.height = (100 * h.tentativas / maximo) + '%';
+    const aa = document.createElement('div'); aa.className = 'a'; aa.style.height = (h.tentativas ? 100 * h.atendidas / h.tentativas : 0) + '%';
+    tt.append(aa);
+    const leg = document.createElement('small'); leg.textContent = h.hora + 'h';
+    col.append(tt, leg); horas.append(col);
+  }
+  if (!d.por_hora.length) horas.textContent = 'Sem ligações hoje.';
+}
+
+atualizar();
+setInterval(atualizar, 3000);
+</script>
+{% endblock %}
