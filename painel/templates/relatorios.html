@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block titulo %}Relatórios{% endblock %}
+{% block conteudo %}
+<style>
+  .topo h2 { margin: 0 0 14px; font-size: 1.6em; }
+  .abas { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+  .abas a { padding: 9px 16px; border-radius: 999px; text-decoration: none; font-weight: 600; font-size: 14px;
+            background: #fff; border: 1px solid var(--borda); color: var(--texto); }
+  .abas a.ativa { background: var(--azul); border-color: var(--azul); color: #fff; }
+  .filtros { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+  .filtros label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: var(--discreto); }
+  .sec { background: #fff; color: var(--azul); }
+  .sec:hover { background: var(--azul-claro); }
+  .rolar { overflow-x: auto; }
+  table.rel { border-collapse: collapse; font-size: 14px; width: 100%; }
+  table.rel th { text-align: left; font-size: 12px; font-weight: 600; color: var(--discreto); padding: 10px;
+                 border-bottom: 1px solid var(--borda); white-space: nowrap; }
+  table.rel td { padding: 10px; border-bottom: 1px solid #eef0f3; white-space: nowrap; }
+  table.rel td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  table.rel th.num { text-align: right; }
+</style>
+
+<div class="topo"><h2>Relatórios</h2></div>
+
+<nav class="abas" aria-label="Tipo de relatório">
+  {% for chave, (titulo, _) in tipos.items() %}
+  <a class="{{ 'ativa' if chave == tipo }}" href="/relatorios?tipo={{ chave }}&de={{ de }}&ate={{ ate }}{% if campanha %}&campanha={{ campanha }}{% endif %}">{{ titulo }}</a>
+  {% endfor %}
+</nav>
+
+<div class="cartao">
+  <p class="discreto" style="margin-top:0">{{ tipos[tipo][1] }}</p>
+  <form class="filtros" method="get" action="/relatorios">
+    <input type="hidden" name="tipo" value="{{ tipo }}">
+    <label>De <input type="date" name="de" value="{{ de }}"></label>
+    <label>Até <input type="date" name="ate" value="{{ ate }}"></label>
+    <label>Campanha
+      <select name="campanha">
+        <option value="">Todas</option>
+        {% for c in campanhas %}{% if tipo != 'ura' or c.tipo == 'ura' %}
+        <option value="{{ c.id }}" {% if c.id == campanha %}selected{% endif %}>#{{ c.id }} · {{ c.nome }}</option>
+        {% endif %}{% endfor %}
+      </select>
+    </label>
+    <button>Ver</button>
+    <button class="sec" name="formato" value="csv">Baixar CSV</button>
+  </form>
+</div>
+
+<div class="cartao">
+  {% if not tabela %}
+  <p class="discreto" style="margin:0">Nenhum dado nesse período.</p>
+  {% else %}
+  <p class="discreto" style="margin-top:0">
+    {{ total }} linha(s){% if total > 500 %} · mostrando as primeiras 500; o CSV traz todas{% endif %}
+  </p>
+  <div class="rolar">
+    <table class="rel">
+      <thead><tr>
+        {% for col in colunas %}<th class="{{ 'num' if tabela[0][loop.index0][1] }}">{{ col }}</th>{% endfor %}
+      </tr></thead>
+      <tbody>
+        {% for linha in tabela %}
+        <tr>{% for valor, numero in linha %}<td class="{{ 'num' if numero }}">{{ valor }}</td>{% endfor %}</tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

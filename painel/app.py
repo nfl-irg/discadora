@@ -1078,6 +1078,189 @@ def acompanhamento_dados(request: Request):
             "atualizado": datetime.now().strftime("%H:%M:%S")}
 
 
+# ------------------------------ relatorios ------------------------------
+import csv, io
+from datetime import date
+from fastapi.responses import Response
+
+RELATORIOS = {
+    "produtividade": ("Produtividade", "Tempos por estado, atendimentos, TMA e tabulações de cada operador no período."),
+    "resultados":    ("Resultados", "Tentativas, atendimento, chamadas curtas e resultados, por campanha e por dia."),
+    "troncos":       ("Troncos", "Chamadas e minutos por tronco e por dia, para conferir com a fatura da operadora."),
+    "ura":           ("Log da URA", "Cada ligação das campanhas de URA, com a detecção de secretária e as teclas respondidas."),
+}
+PERIODO = "WITH p AS (SELECT %(ini)s::date::timestamptz AS ini, (%(fim)s::date + 1)::timestamptz AS fim) "
+FILTRO_T = " t.inicio >= p.ini AND t.inicio < p.fim AND (%(cid)s::int IS NULL OR t.campanha_id = %(cid)s) "
+
+
+def hms(s):
+    s = int(s or 0)
+    return f"{s // 3600}:{s % 3600 // 60:02d}:{s % 60:02d}"
+
+
+def num(n):
+    return f"{int(n or 0):,}".replace(",", ".")
+
+
+def pct_txt(a, b):
+    return f"{100 * a / b:.1f}%".replace(".", ",") if b else "—"
+
+
+def rel_produtividade(conn, prm):
+    estados = conn.execute(PERIODO + """
+        SELECT e.login, e.estado,
+               sum(extract(epoch FROM least(coalesce(e.fim, now()), p.fim) - greatest(e.inicio, p.ini)))::int AS s
+        FROM operador_estados e CROSS JOIN p
+        WHERE e.login IS NOT NULL AND e.inicio < p.fim AND coalesce(e.fim, now()) > p.ini
+          AND (%(cid)s::int IS NULL OR e.campanha_id = %(cid)s)
+        GROUP BY 1, 2""", prm).fetchall()
+    atend = {r["login"]: r for r in conn.execute(PERIODO + """
+        SELECT t.operador_login AS login,
+               count(*) FILTER (WHERE t.atendida_em IS NOT NULL) AS atend,
+               avg(t.conversa_s) FILTER (WHERE t.atendida_em IS NOT NULL) AS tma,
+               coalesce(sum(t.conversa_s) FILTER (WHERE t.atendida_em IS NOT NULL), 0) AS falado
+        FROM tentativas t CROSS JOIN p
+        WHERE t.operador_login IS NOT NULL AND""" + FILTRO_T + "GROUP BY 1", prm).fetchall()}
+    tabs = conn.execute(PERIODO + """
+        SELECT t.operador_login AS login, t.tabulacao, count(*) AS n
+        FROM tentativas t CROSS JOIN p
+        WHERE t.operador_login IS NOT NULL AND t.tabulacao IS NOT NULL AND""" + FILTRO_T + "GROUP BY 1, 2",
+        prm).fetchall()
+    nomes_tab = {}
+    for c in conn.execute("SELECT tabulacoes FROM campanhas").fetchall():
+        for o in c["tabulacoes"] or []:
+            nomes_tab.setdefault(o["codigo"], o["nome"])
+    tempos, contagem = {}, {}
+    for r in estados:
+        tempos.setdefault(r["login"], {})[r["estado"]] = r["s"] or 0
+    for r in tabs:
+        contagem.setdefault(r["login"], {})[r["tabulacao"]] = r["n"]
+    codigos = sorted({r["tabulacao"] for r in tabs}, key=lambda c: nomes_tab.get(c, c))
+    colunas = ["Operador", "Logado", "Em chamada", "Tabulando", "Em pausa", "Disponível",
+               "Atendimentos", "TMA", "Tempo falado"] + [nomes_tab.get(c, c) for c in codigos]
+    linhas = []
+    for login in sorted(set(tempos) | set(atend), key=lambda x: (len(x), x)):
+        tp, at, tb = tempos.get(login, {}), atend.get(login) or {}, contagem.get(login, {})
+        linhas.append([login, hms(sum(tp.values())), hms(tp.get("em_chamada")), hms(tp.get("tabulando")),
+                       hms(tp.get("pausa")), hms(tp.get("livre")), num(at.get("atend")),
+                       hms(at.get("tma")) if at.get("tma") is not None else "—", hms(at.get("falado"))]
+                      + [num(tb.get(c)) for c in codigos])
+    return colunas, linhas
+
+
+def rel_resultados(conn, prm):
+    base = conn.execute(PERIODO + """
+        SELECT t.inicio::date AS dia, c.nome AS campanha, t.campanha_id,
+               count(*) AS tent,
+               count(*) FILTER (WHERE t.fim IS NOT NULL) AS fin,
+               count(*) FILTER (WHERE t.atendida_em IS NOT NULL
+                                   OR t.resultado IN ('atendida', 'respondente')) AS atend,
+               count(*) FILTER (WHERE t.fim IS NOT NULL AND t.fim - t.inicio <= interval '6 seconds') AS curtas
+        FROM tentativas t JOIN campanhas c ON c.id = t.campanha_id CROSS JOIN p
+        WHERE""" + FILTRO_T + "GROUP BY 1, 2, 3 ORDER BY 1, 2", prm).fetchall()
+    por_res = conn.execute(PERIODO + """
+        SELECT t.inicio::date AS dia, t.campanha_id, coalesce(t.resultado, 'em_andamento') AS res, count(*) AS n
+        FROM tentativas t CROSS JOIN p WHERE""" + FILTRO_T + "GROUP BY 1, 2, 3", prm).fetchall()
+    cont = {}
+    for r in por_res:
+        cont.setdefault((r["dia"], r["campanha_id"]), {})[r["res"]] = r["n"]
+    presentes = {r["res"] for r in por_res}
+    ordem = [k for k in ROTULOS if k in presentes] + sorted(presentes - set(ROTULOS))
+    rot = {**ROTULOS, "em_andamento": "Em andamento"}
+    colunas = ["Dia", "Campanha", "Tentativas", "Atendidas", "Taxa de atendimento", "Chamadas curtas"] \
+              + [rot.get(k, k) for k in ordem]
+    linhas = []
+    for r in base:
+        c = cont.get((r["dia"], r["campanha_id"]), {})
+        linhas.append([r["dia"].strftime("%d/%m/%Y"), r["campanha"], num(r["tent"]), num(r["atend"]),
+                       pct_txt(r["atend"], r["fin"]), pct_txt(r["curtas"], r["fin"])]
+                      + [num(c.get(k)) for k in ordem])
+    return colunas, linhas
+
+
+def rel_troncos(conn, prm):
+    linhas = conn.execute(PERIODO + """
+        SELECT t.inicio::date AS dia, k.nome AS tronco, count(*) AS cham,
+               count(*) FILTER (WHERE t.atendida_em IS NOT NULL OR t.conversa_s > 0) AS atend,
+               coalesce(sum(t.conversa_s) FILTER (WHERE t.conversa_s > 0), 0) AS seg,
+               coalesce(sum(ceil(t.conversa_s / 60.0)) FILTER (WHERE t.conversa_s > 0), 0)::int AS cheios
+        FROM tentativas t JOIN troncos k ON k.id = t.tronco_id CROSS JOIN p
+        WHERE""" + FILTRO_T + "GROUP BY 1, 2 ORDER BY 1, 2", prm).fetchall()
+    colunas = ["Dia", "Tronco", "Chamadas", "Atendidas", "Tempo falado", "Minutos falados",
+               "Minutos (cada ligação arredondada para cima)"]
+    return colunas, [[r["dia"].strftime("%d/%m/%Y"), r["tronco"], num(r["cham"]), num(r["atend"]),
+                      hms(r["seg"]), f"{r['seg'] / 60:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+                      num(r["cheios"])] for r in linhas]
+
+
+def rel_ura(conn, prm):
+    linhas = conn.execute(PERIODO + """
+        SELECT t.inicio, c.nome AS campanha, t.telefone, t.resultado, t.amd_status, t.conversa_s,
+               t.sip_codigo, t.causa_codigo, t.causa_texto,
+               (SELECT jsonb_object_agg(r.ordem::text, r.tecla) FROM ura_respostas r
+                WHERE r.tentativa_id = t.id) AS resp
+        FROM tentativas t JOIN campanhas c ON c.id = t.campanha_id CROSS JOIN p
+        WHERE c.tipo = 'ura' AND""" + FILTRO_T + "ORDER BY t.id DESC", prm).fetchall()
+    perguntas = max((int(k) for r in linhas for k in (r["resp"] or {})), default=0)
+    deteccao = {"HUMAN": "Pessoa", "MACHINE": "Secretária"}
+    colunas = ["Data e hora", "Campanha", "Telefone", "Resultado", "Detecção", "Conversa (s)",
+               "Código SIP", "Causa"] + [f"P{i}" for i in range(1, perguntas + 1)]
+    saida = []
+    for r in linhas:
+        resp = r["resp"] or {}
+        causa = " ".join(str(x) for x in (r["causa_codigo"], r["causa_texto"]) if x)
+        saida.append([r["inicio"].strftime("%d/%m/%Y %H:%M:%S"), r["campanha"], r["telefone"],
+                      ROTULOS.get(r["resultado"], r["resultado"] or "Em andamento"),
+                      deteccao.get(r["amd_status"], r["amd_status"] or ""),
+                      "" if r["conversa_s"] is None else str(r["conversa_s"]),
+                      r["sip_codigo"] or "", causa]
+                     + [resp.get(str(i), "") for i in range(1, perguntas + 1)])
+    return colunas, saida
+
+
+GERADORES = {"produtividade": rel_produtividade, "resultados": rel_resultados,
+             "troncos": rel_troncos, "ura": rel_ura}
+
+
+@app.get("/relatorios", response_class=HTMLResponse)
+def relatorios(request: Request, tipo: str = "produtividade", de: str = "", ate: str = "",
+               campanha: str = "", formato: str = ""):
+    u = usuario_atual(request, "relatorios")
+    if tipo not in RELATORIOS:
+        tipo = "produtividade"
+    hoje = date.today()
+    try:
+        d_ini = date.fromisoformat(de) if de else hoje
+        d_fim = date.fromisoformat(ate) if ate else hoje
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Data inválida")
+    if d_fim < d_ini:
+        d_ini, d_fim = d_fim, d_ini
+    cid = int(campanha) if campanha.isdigit() else None
+    prm = {"ini": d_ini, "fim": d_fim, "cid": cid}
+    with db() as conn:
+        colunas, linhas = GERADORES[tipo](conn, prm)
+        linhas = [["" if v is None else str(v) for v in linha] for linha in linhas]
+        campanhas_lista = conn.execute("SELECT id, nome, tipo FROM campanhas ORDER BY id DESC").fetchall()
+    detalhe = {"tipo": tipo, "de": str(d_ini), "ate": str(d_fim), "campanha": cid, "linhas": len(linhas)}
+    if formato == "csv":
+        auditar(u["id"], "relatorio_csv", request, **detalhe)
+        buf = io.StringIO()
+        w = csv.writer(buf, delimiter=";")
+        w.writerow(colunas)
+        w.writerows(linhas)
+        nome = f"{tipo}_{d_ini:%Y%m%d}_{d_fim:%Y%m%d}" + (f"_c{cid}" if cid else "") + ".csv"
+        return Response(("\ufeff" + buf.getvalue()).encode("utf-8"), media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": f'attachment; filename="{nome}"'})
+    auditar(u["id"], "relatorio_ver", request, **detalhe)
+    numerico = re.compile(r"[\d.,:%—\s-]+")
+    tabela = [[(v, bool(v) and bool(numerico.fullmatch(v))) for v in linha] for linha in linhas[:500]]
+    return templates.TemplateResponse(request, "relatorios.html", {
+        "usuario": u, "tipos": RELATORIOS, "tipo": tipo, "de": d_ini.isoformat(), "ate": d_fim.isoformat(),
+        "campanha": cid, "campanhas": campanhas_lista, "colunas": colunas, "tabela": tabela,
+        "total": len(linhas)})
+
+
 # modulos ainda nao construidos: so verifica a permissao e mostra "em construcao"
 @app.get("/{modulo}", response_class=HTMLResponse)
 def em_construcao(request: Request, modulo: str):
