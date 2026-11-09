@@ -2,46 +2,81 @@
 {% block titulo %}Operador{% endblock %}
 {% block conteudo %}
 <style>
-  .linha { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
-  #status { font-weight: 700; padding: 6px 14px; border-radius: 20px; }
-  #status.pausa   { background: #eef0f6; color: #444; }
-  #status.livre   { background: #e3f4e8; color: #1b6b34; }
-  #status.chamada { background: #fde8e1; color: #a8380f; }
-  #telefone { font-size: 2em; font-weight: 700; letter-spacing: .03em; }
-  .campos { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-            gap: 12px; margin-top: 16px; }
-  .campo span { display: block; font-size: .8em; color: #666; }
-  .campo b { font-size: 1.05em; }
-  .sec, a.botao { background: #fff; color: var(--azul); border: 1px solid var(--azul);
-                  padding: 8px 10px; border-radius: 6px; text-decoration: none; cursor: pointer; }
-  button:disabled { opacity: .55; cursor: default; }
-  #tabulacao { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--borda); }
-  #opcoes { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  .op-estado { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; }
+  .st { display: inline-flex; align-items: center; gap: 12px; padding: 10px 16px; border-radius: 10px; font-weight: 700; font-size: 16px; }
+  .st i { width: 10px; height: 10px; border-radius: 50%; background: currentColor; }
+  .st.pausa   { background: #e9ebf2; color: #363f5c; }
+  .st.livre   { background: #e2f3e9; color: #1f6b3d; }
+  .st.chamada { background: var(--laranja-claro); color: var(--laranja-texto); }
+  .st.chamada i { background: var(--laranja); }
+  .st .mono { font-weight: 600; }
+  .op-botoes { margin-left: auto; display: flex; flex-wrap: wrap; gap: 10px; }
+  .op-botoes button, .acoes button, .acoes a { min-height: 46px; padding: 0 18px; border-radius: 10px; font-size: 14px; }
+  .sec { background: #fff; color: var(--azul); }
+  .sec:hover { background: var(--azul-claro); }
+  .perigo { background: #fbe4e2; color: #9c221b; border-color: #e2b9b5; }
+  .perigo:hover { background: #f7d3d0; }
+  .op-corpo { display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-start; }
+  .op-corpo .cartao { margin: 0; }
+  .op-contato { flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; gap: 20px; padding: 24px; }
+  .op-tab { flex: 1 1 300px; min-width: 0; display: flex; flex-direction: column; gap: 12px; padding: 24px; }
+  .op-tab h3 { margin: 0; font-size: 17px; }
+  .tel-linha { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-top: 6px; }
+  #telefone { font-size: 38px; font-weight: 600; letter-spacing: .01em; }
+  .campos { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px 20px;
+            padding: 18px 0; border-top: 1px solid #eef0f3; border-bottom: 1px solid #eef0f3; }
+  .campos:empty { display: none; }
+  .campo span { display: block; font-size: 12px; color: var(--discreto); }
+  .campo b { font-size: 16px; }
+  .acoes { display: flex; flex-wrap: wrap; gap: 12px; }
+  a.prim { display: inline-flex; align-items: center; gap: 8px; background: var(--azul); color: #fff;
+           text-decoration: none; font-weight: 600; }
+  a.prim:hover { background: var(--azul-escuro); color: #fff; }
+  #opcoes { display: flex; flex-direction: column; gap: 8px; }
+  #opcoes button { text-align: left; min-height: 46px; border-radius: 10px; background: #fff; color: var(--texto); border: 1px solid #d5d9e4; }
+  #opcoes button:hover { background: var(--azul-claro); }
+  #opcoes button.escolhida { border: 2px solid var(--azul); background: var(--azul-claro); color: var(--azul-escuro); }
+  #opcoes button.bloqueio { color: #9c221b; border-color: #e2b9b5; }
+  #aguardando p { margin: 0; }
 </style>
 
-<div class="cartao linha">
-  <span id="status" class="pausa">Conectando o ramal…</span>
-  <button id="disp" disabled>Ficar disponível</button>
-  <button id="pausa" class="sec" hidden>Pausa</button>
-  <button id="sair" class="sec" hidden>Sair da fila</button>
+<div class="cartao op-estado">
+  <div class="st pausa" id="caixa-status"><i aria-hidden="true"></i><span id="status">Conectando o ramal…</span><span class="mono" id="cronometro"></span></div>
   <span class="discreto">Ramal {{ usuario.ramal }}</span>
+  <div class="op-botoes">
+    <button id="disp" disabled>Ficar disponível</button>
+    <button id="pausa" class="sec" hidden>Pausa</button>
+    <button id="sair" class="sec" hidden>Sair da fila</button>
+  </div>
 </div>
 
 <div class="cartao" id="aguardando" hidden><p class="discreto">Aguardando a próxima ligação…</p></div>
 
-<div class="cartao" id="painel-contato" hidden>
-  <div class="discreto" id="campanha"></div>
-  <div class="linha" style="margin-top:8px">
-    <span id="telefone"></span>
-    <button id="copiar" class="sec">Copiar telefone</button>
-    <a id="questionario" class="botao" target="_blank" rel="noopener" hidden>Abrir questionário</a>
-    <button id="encerrar">Encerrar chamada</button>
-  </div>
-  <div class="campos" id="campos"></div>
-  <div id="tabulacao" hidden>
-    <span class="discreto">Tabulação</span>
+<div class="op-corpo">
+  <section class="cartao op-contato" id="painel-contato" aria-label="Contato" hidden>
+    <div>
+      <span class="discreto" id="campanha"></span>
+      <div class="tel-linha">
+        <span id="telefone" class="mono"></span>
+        <button id="copiar" class="sec">Copiar telefone</button>
+      </div>
+    </div>
+    <div class="campos" id="campos"></div>
+    <div class="acoes">
+      <a id="questionario" class="prim" target="_blank" rel="noopener" hidden>Abrir questionário
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"></path></svg></a>
+      <button id="encerrar" class="perigo">Encerrar chamada</button>
+    </div>
+  </section>
+
+  <section class="cartao op-tab" id="tabulacao" aria-label="Tabulação" hidden>
+    <div>
+      <h3>Tabulação</h3>
+      <span class="discreto">Pode ser feita durante ou depois da ligação.</span>
+    </div>
     <div id="opcoes"></div>
-  </div>
+    <span class="discreto" style="font-size:12px">A opção em vermelho bloqueia o telefone para futuras ligações.</span>
+  </section>
 </div>
 
 <audio id="audio" autoplay></audio>
@@ -50,8 +85,8 @@
 const $ = id => document.getElementById(id);
 let ua = null, fila = null, dominio = null, telefoneAtual = null, registrado = false, estado = null;
 
-function mostrarStatus(texto, classe) { $('status').textContent = texto; $('status').className = classe; }
-function mmss(s) { s = s || 0; return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
+function mostrarStatus(texto, classe) { $('status').textContent = texto; $('caixa-status').className = 'st ' + classe; }
+function mmss(s) { s = s || 0; return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'); }
 
 async function iniciar() {
   const r = await fetch('/operador/credenciais');
@@ -84,19 +119,15 @@ $('disp').onclick = async () => {
   else await fetch('/operador/retomar', { method: 'POST' });
   atualizar();
 };
-
 // "Pausa": sem chamada, pausa na hora; com chamada, pausa depois que ela terminar
 $('pausa').onclick = async () => { await fetch('/operador/pausar', { method: 'POST' }); atualizar(); };
-
 // "Sair da fila": desliga a ligacao com a discadora (fim do turno)
 $('sair').onclick = () => {
   if (estado === 'em_chamada' &&
       !confirm('Há uma chamada em andamento. Sair da fila vai encerrá-la. Continuar?')) return;
   if (fila) fila.terminate();
 };
-
 $('encerrar').onclick = () => fetch('/operador/encerrar', { method: 'POST' });
-
 $('copiar').onclick = async () => {
   await navigator.clipboard.writeText(telefoneAtual);
   $('copiar').textContent = 'Copiado!';
@@ -134,13 +165,14 @@ async function atualizar() {
   const atendendo = estado === 'em_chamada' || estado === 'tabulando';
   telefoneAtual = contato ? contato.telefone : null;
 
-  // status
-  if (!fila)                       { if (registrado) mostrarStatus('Fora da fila', 'pausa'); }
-  else if (!e.online)              mostrarStatus('Entrando na fila…', 'pausa');
-  else if (estado === 'pausa')     mostrarStatus('Em pausa há ' + mmss(e.segundos), 'pausa');
-  else if (estado === 'tabulando') mostrarStatus('Tabule a ligação' + (e.pausa_solicitada ? ' · pausa em seguida' : ''), 'chamada');
+  // estado e cronometro
+  if (!fila)                        { if (registrado) mostrarStatus('Fora da fila', 'pausa'); }
+  else if (!e.online)               mostrarStatus('Entrando na fila…', 'pausa');
+  else if (estado === 'pausa')      mostrarStatus('Em pausa', 'pausa');
+  else if (estado === 'tabulando')  mostrarStatus('Tabule a ligação' + (e.pausa_solicitada ? ' · pausa em seguida' : ''), 'chamada');
   else if (estado === 'em_chamada') mostrarStatus('Em chamada' + (e.pausa_solicitada ? ' · pausa após esta ligação' : ''), 'chamada');
-  else                             mostrarStatus('Disponível' + (e.pausa_solicitada ? ' · pausa agendada' : ''), 'livre');
+  else                              mostrarStatus('Disponível' + (e.pausa_solicitada ? ' · pausa agendada' : ''), 'livre');
+  $('cronometro').textContent = (naFila && ['pausa', 'tabulando', 'em_chamada'].includes(estado)) ? mmss(e.segundos) : '';
 
   // botoes
   $('disp').hidden = naFila && estado !== 'pausa';
@@ -152,8 +184,9 @@ async function atualizar() {
                          : (atendendo ? 'Pausa após esta ligação' : 'Pausa');
   $('sair').hidden = !fila;
 
-  // contato
+  // contato e tabulacao
   $('painel-contato').hidden = !contato;
+  $('tabulacao').hidden = !(contato && contato.tabulacao_ativa);
   $('aguardando').hidden = !(naFila && estado === 'livre' && !contato);
   $('encerrar').hidden = estado !== 'em_chamada';
   if (!contato) return;
@@ -172,13 +205,13 @@ async function atualizar() {
   q.hidden = !contato.questionario_url;
   if (contato.questionario_url) q.href = contato.questionario_url;
 
-  $('tabulacao').hidden = !contato.tabulacao_ativa;
   if (contato.tabulacao_ativa) {
     desenhar('opcoes', JSON.stringify([contato.tabulacoes, contato.tabulacao_escolhida]), el => {
       for (const o of contato.tabulacoes) {
         const b = document.createElement('button');
         b.textContent = o.nome;
-        b.className = o.codigo === contato.tabulacao_escolhida ? '' : 'sec';
+        if (o.codigo === contato.tabulacao_escolhida) b.className = 'escolhida';
+        else if (o.bloqueia) b.className = 'bloqueio';
         b.onclick = () => tabular(o.codigo);
         el.append(b);
       }

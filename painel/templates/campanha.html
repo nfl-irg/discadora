@@ -2,17 +2,25 @@
 {% block titulo %}{{ c.nome }}{% endblock %}
 {% block conteudo %}
 <style>
-  .numeros { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; }
-  .numero { background: #f5f6fa; border-radius: 8px; padding: 12px; }
-  .numero b { display: block; font-size: 1.6em; }
-  .numero span { font-size: .85em; color: #555; }
-  .acoes { display: flex; gap: 8px; flex-wrap: wrap; }
+  .acoes { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
   .acoes form { margin: 0; }
-  .sec { background: #fff; color: var(--azul); border: 1px solid var(--azul); }
-  table { border-collapse: collapse; }
-  td { padding: 4px 16px 4px 0; }
-  pre { background: #1d1f2c; color: #d8dbe8; padding: 12px; border-radius: 6px;
-        max-height: 320px; overflow: auto; font-size: .82em; white-space: pre-wrap; }
+  .acoes button { min-height: 42px; }
+  .sec { background: #fff; color: var(--azul); }
+  .sec:hover { background: var(--azul-claro); }
+  .andamento { display: flex; height: 14px; border-radius: 7px; overflow: hidden; background: #eef0f3; margin-bottom: 14px; }
+  .andamento i { display: block; height: 100%; }
+  .numeros { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+  .numero { background: #f7f8fa; border-radius: 10px; padding: 12px 14px; }
+  .numero b { display: block; font-size: 1.6em; font-variant-numeric: tabular-nums; }
+  .numero span { font-size: .85em; color: var(--discreto); }
+  .res { display: grid; grid-template-columns: minmax(140px, 220px) 1fr 70px; gap: 12px; align-items: center;
+         font-size: 14px; padding: 5px 0; }
+  .res .barra { height: 10px; border-radius: 5px; background: #eef0f3; overflow: hidden; }
+  .res .barra i { display: block; height: 100%; border-radius: 5px; background: var(--laranja); }
+  .res b { text-align: right; font-variant-numeric: tabular-nums; }
+  pre { background: var(--azul); color: #e3e9f4; padding: 14px 16px; border-radius: 8px;
+        max-height: 320px; overflow: auto; font-size: .82em; white-space: pre-wrap;
+        font-family: "JetBrains Mono", ui-monospace, monospace; line-height: 1.6; }
 </style>
 
 <p><a href="/campanhas">← Campanhas</a></p>
@@ -52,6 +60,11 @@
 </div>
 
 <div class="cartao">
+  {% set tot = n.total or 1 %}
+  <div class="andamento" role="img" aria-label="{{ n.finalizados }} finalizados, {{ n.discando }} em ligação, {{ n.pendentes }} pendentes">
+    <i style="width: {{ (100 * n.finalizados / tot)|round(1) }}%; background: var(--azul)"></i>
+    <i style="width: {{ (100 * n.discando / tot)|round(1) }}%; background: var(--laranja)"></i>
+  </div>
   <div class="numeros">
     <div class="numero"><b>{{ n.total }}</b><span>contatos</span></div>
     <div class="numero"><b>{{ n.pendentes }}</b><span>pendentes</span></div>
@@ -63,7 +76,12 @@
 
 <div class="cartao">
   <h3>Resultados</h3>
-  <table>{% for r in resultados %}<tr><td>{{ r.resultado }}</td><td><b>{{ r.qtd }}</b></td></tr>{% endfor %}</table>
+  {% set maior = (resultados|map(attribute='qtd')|max) if resultados else 1 %}
+  {% for r in resultados %}
+  <div class="res"><span>{{ r.resultado }}</span>
+    <div class="barra"><i style="width: {{ (100 * r.qtd / maior)|round(1) }}%"></i></div>
+    <b>{{ r.qtd }}</b></div>
+  {% endfor %}
 </div>
 
 <div class="cartao">
@@ -101,7 +119,7 @@
   .vivo { width: 100%; border-collapse: collapse; font-size: .9em; margin-top: 12px; }
   .vivo th, .vivo td { padding: 6px 8px; border-bottom: 1px solid var(--borda); text-align: left; }
   .sit { padding: 2px 8px; border-radius: 10px; font-size: .85em; }
-  .sit.andamento { background: #e4ecfb; color: #1d4f9c; }
+  .sit.andamento { background: var(--laranja-claro); color: var(--laranja-texto); }
   .sit.ok { background: #e3f4e8; color: #1b6b34; }
   .sit.nao { background: #f1f1f4; color: #555; }
 </style>
