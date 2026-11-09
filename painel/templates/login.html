@@ -1,13 +1,45 @@
 {% extends "base.html" %}
 {% block titulo %}Entrar{% endblock %}
 {% block conteudo %}
-<div class="cartao" style="max-width:360px; margin:60px auto">
-  <h2>Entrar</h2>
-  {% if erro %}<p class="erro">{{ erro }}</p>{% endif %}
-  <form method="post" action="/login">
-    <p><input name="login" placeholder="Usuário" required autofocus style="width:100%"></p>
-    <p><input name="senha" type="password" placeholder="Senha" required style="width:100%"></p>
-    <p><button type="submit" style="width:100%">Entrar</button></p>
-  </form>
+<style>
+  body { background: var(--azul); }
+  main { max-width: none; padding: 0; }
+  .entrada { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 40px 16px; }
+  .caixa { width: 100%; max-width: 400px; display: flex; flex-direction: column; gap: 22px; }
+  .marca-login { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .marca-login img { width: 170px; height: auto; display: block; }
+  .marca-login span { font-size: 12px; font-weight: 600; letter-spacing: .16em; text-transform: uppercase; color: #afc0dd; }
+  .cartao-login { background: #fff; border-radius: 16px; border-top: 5px solid var(--laranja); padding: 32px;
+                  display: flex; flex-direction: column; gap: 18px; }
+  .cartao-login h1 { margin: 0; font-size: 22px; }
+  .cartao-login p.sub { margin: 4px 0 0; font-size: 14px; color: var(--discreto); }
+  .cartao-login label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; color: #363a47; }
+  .cartao-login input { min-height: 46px; padding: 0 14px; font-size: 15px; }
+  .cartao-login button { min-height: 48px; font-size: 15px; width: 100%; }
+  .cartao-login .erro { margin: 0; padding: 10px 12px; border-radius: 8px; background: #fbe4e2; font-size: 14px; }
+  .rodape-login { text-align: center; font-size: 12px; color: #afc0dd; }
+</style>
+<div class="entrada">
+  <div class="caixa">
+    <div class="marca-login">
+      <img src="/static/logo-irg-branco.png" alt="IRG Pesquisas">
+      <span>Discadora</span>
+    </div>
+    <form class="cartao-login" method="post" action="/login">
+      <div>
+        <h1>Entrar</h1>
+        <p class="sub">Use o login e a senha que o administrador criou para você.</p>
+      </div>
+      {% if erro %}<p class="erro" role="alert">{{ erro }}</p>{% endif %}
+      <label>Login
+        <input name="login" required autofocus autocapitalize="off" autocomplete="username">
+      </label>
+      <label>Senha
+        <input name="senha" type="password" required autocomplete="current-password">
+      </label>
+      <button type="submit">Entrar</button>
+    </form>
+    <p class="rodape-login">Acesso restrito à equipe. Toda entrada e saída fica registrada.</p>
+  </div>
 </div>
 {% endblock %}

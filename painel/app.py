@@ -1261,6 +1261,210 @@ def relatorios(request: Request, tipo: str = "produtividade", de: str = "", ate:
         "total": len(linhas)})
 
 
+# ------------------------------ usuarios ------------------------------
+import secrets
+from urllib.parse import urlencode as _urlencode
+
+PERFIS_NOMES = {"admin": "Administrador", "supervisor": "Supervisor", "monitoria": "Monitoria",
+                "operador": "Operador", "cliente": "Cliente"}
+LOGIN_VALIDO = re.compile(r"[a-z0-9][a-z0-9._-]{1,29}")
+ALFABETO_SENHA = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789"   # sem 0/O, 1/l/I
+
+
+def gerar_senha(n=10):
+    return "".join(secrets.choice(ALFABETO_SENHA) for _ in range(n))
+
+
+def so_admin(request):
+    u = usuario_atual(request, "usuarios")
+    if u["perfil"] != "admin":
+        raise HTTPException(status_code=403)
+    return u
+
+
+def ramal_livre(conn, uid=None):
+    """Primeiro ramal sem usuario ativo (a mesma regra do criar_usuario.py)."""
+    r = conn.execute("""SELECT r.ramal FROM ramais r
+                        WHERE NOT EXISTS (SELECT 1 FROM usuarios u
+                                          WHERE u.ramal = r.ramal AND u.ativo
+                                            AND u.id IS DISTINCT FROM %s)
+                        ORDER BY r.ramal LIMIT 1""", (uid,)).fetchone()
+    return r["ramal"] if r else None
+
+
+def ramal_ocupado(conn, ramal, uid):
+    return conn.execute("""SELECT 1 FROM usuarios WHERE ramal = %s AND ativo AND id <> %s""",
+                        (ramal, uid)).fetchone() is not None
+
+
+def historico_usuario(conn, uid, login):
+    """Ja usou o sistema? (acessos, auditoria, ligacoes ou estados de operador)"""
+    return conn.execute("""SELECT EXISTS (SELECT 1 FROM auditoria WHERE usuario_id = %s)
+                               OR EXISTS (SELECT 1 FROM tentativas WHERE operador_login = %s)
+                               OR EXISTS (SELECT 1 FROM operador_estados WHERE login = %s) AS tem""",
+                        (uid, login, login)).fetchone()["tem"]
+
+
+def buscar_usuario(conn, uid):
+    a = conn.execute("""SELECT u.id, u.login, u.nome, u.perfil, u.ramal, u.cliente_id, u.ativo, u.criado_em,
+                               (SELECT max(quando) FROM auditoria WHERE usuario_id = u.id) AS ultimo
+                        FROM usuarios u WHERE u.id = %s""", (uid,)).fetchone()
+    if not a:
+        raise HTTPException(status_code=404)
+    return a
+
+
+def tela_usuario(request, u, alvo=None, **ctx):
+    with db() as conn:
+        clientes = conn.execute("SELECT id, nome FROM clientes ORDER BY nome").fetchall()
+        pode_excluir = bool(alvo) and not historico_usuario(conn, alvo["id"], alvo["login"])
+    return templates.TemplateResponse(request, "usuario.html", {
+        "usuario": u, "alvo": alvo, "perfis": PERFIS_NOMES, "clientes": clientes,
+        "form": ctx.pop("form", {}), "erro": ctx.pop("erro", ""), "ok": ctx.pop("ok", ""),
+        "senha_gerada": ctx.pop("senha_gerada", None), "pode_excluir": pode_excluir})
+
+
+def cliente_do_formulario(f, perfil):
+    if perfil != "cliente":
+        return None
+    cid = f.get("cliente_id") or ""
+    if not cid.isdigit():
+        raise ValueError("Escolha de qual cliente é esse acesso.")
+    return int(cid)
+
+
+def senha_do_formulario(f):
+    """Devolve (senha, gerada?)."""
+    if f.get("modo_senha") == "definir":
+        senha = f.get("senha") or ""
+        if len(senha) < 6:
+            raise ValueError("A senha precisa ter pelo menos 6 caracteres.")
+        return senha, False
+    return gerar_senha(), True
+
+
+@app.get("/usuarios", response_class=HTMLResponse)
+def lista_usuarios(request: Request):
+    u = so_admin(request)
+    with db() as conn:
+        usuarios = conn.execute("""
+            SELECT u.id, u.login, u.nome, u.perfil, u.ramal, u.ativo, c.nome AS cliente,
+                   (SELECT max(a.quando) FROM auditoria a WHERE a.usuario_id = u.id) AS ultimo
+            FROM usuarios u LEFT JOIN clientes c ON c.id = u.cliente_id
+            ORDER BY u.ativo DESC, u.perfil, length(u.login), u.login""").fetchall()
+    return templates.TemplateResponse(request, "usuarios.html",
+                                      {"usuario": u, "usuarios": usuarios, "perfis": PERFIS_NOMES})
+
+
+@app.get("/usuarios/novo", response_class=HTMLResponse)
+def novo_usuario(request: Request):
+    return tela_usuario(request, so_admin(request))
+
+
+@app.post("/usuarios/novo", response_class=HTMLResponse)
+async def criar_usuario_painel(request: Request):
+    u = so_admin(request)
+    f = await request.form()
+    login = (f.get("login") or "").strip().lower()
+    nome = (f.get("nome") or "").strip()
+    perfil = f.get("perfil") or ""
+    try:
+        if not LOGIN_VALIDO.fullmatch(login):
+            raise ValueError("Login: de 2 a 30 caracteres, só letras minúsculas, números, ponto, hífen e _.")
+        if not nome:
+            raise ValueError("Informe o nome.")
+        if perfil not in PERFIS_NOMES:
+            raise ValueError("Escolha o perfil.")
+        cliente_id = cliente_do_formulario(f, perfil)
+        senha, gerada = senha_do_formulario(f)
+        with db() as conn:
+            if conn.execute("SELECT 1 FROM usuarios WHERE login = %s", (login,)).fetchone():
+                raise ValueError("Já existe um usuário com esse login.")
+            ramal = None
+            if perfil == "operador":
+                ramal = ramal_livre(conn)
+                if not ramal:
+                    raise ValueError("Não há ramal livre para um novo operador. Aumente a faixa no gerar_ramais.py.")
+            novo_id = conn.execute("""INSERT INTO usuarios (login, nome, senha_hash, perfil, ramal, cliente_id)
+                                      VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
+                                   (login, nome, hasher.hash(senha), perfil, ramal, cliente_id)).fetchone()["id"]
+            alvo = buscar_usuario(conn, novo_id)
+    except ValueError as e:
+        return tela_usuario(request, u, form=dict(f), erro=str(e))
+    auditar(u["id"], "usuario_criado", request, alvo=login, perfil=perfil, ramal=ramal)
+    return tela_usuario(request, u, alvo, ok="Usuário criado.", senha_gerada=senha if gerada else None)
+
+
+@app.get("/usuarios/{uid:int}", response_class=HTMLResponse)
+def editar_usuario(request: Request, uid: int, ok: str = "", erro: str = ""):
+    u = so_admin(request)
+    with db() as conn:
+        alvo = buscar_usuario(conn, uid)
+    return tela_usuario(request, u, alvo, ok=ok, erro=erro)
+
+
+@app.post("/usuarios/{uid:int}", response_class=HTMLResponse)
+async def alterar_usuario(request: Request, uid: int):
+    u = so_admin(request)
+    f = await request.form()
+    acao = f.get("acao")
+    proprio = uid == u["id"]
+    try:
+        with db() as conn:
+            alvo = buscar_usuario(conn, uid)
+            if acao == "salvar":
+                nome = (f.get("nome") or "").strip()
+                perfil = f.get("perfil") or ""
+                if not nome or perfil not in PERFIS_NOMES:
+                    raise ValueError("Informe o nome e o perfil.")
+                if proprio and perfil != "admin":
+                    raise ValueError("Você não pode tirar o seu próprio perfil de administrador.")
+                cliente_id = cliente_do_formulario(f, perfil)
+                ramal = alvo["ramal"] if perfil == "operador" else None
+                if perfil == "operador" and (not ramal or ramal_ocupado(conn, ramal, uid)):
+                    ramal = ramal_livre(conn, uid)
+                    if not ramal:
+                        raise ValueError("Não há ramal livre para esse operador.")
+                conn.execute("""UPDATE usuarios SET nome = %s, perfil = %s, ramal = %s, cliente_id = %s
+                                WHERE id = %s""", (nome, perfil, ramal, cliente_id, uid))
+                msg, detalhe = "Dados salvos.", {"perfil": perfil, "ramal": ramal}
+            elif acao == "senha":
+                senha, gerada = senha_do_formulario(f)
+                conn.execute("UPDATE usuarios SET senha_hash = %s WHERE id = %s", (hasher.hash(senha), uid))
+                alvo = buscar_usuario(conn, uid)
+            elif acao == "desativar":
+                if proprio:
+                    raise ValueError("Você não pode desativar o seu próprio usuário.")
+                conn.execute("UPDATE usuarios SET ativo = false WHERE id = %s", (uid,))
+                msg, detalhe = "Usuário desativado. O acesso foi bloqueado na hora.", {}
+            elif acao == "reativar":
+                ramal = alvo["ramal"]
+                if alvo["perfil"] == "operador" and (not ramal or ramal_ocupado(conn, ramal, uid)):
+                    ramal = ramal_livre(conn, uid)
+                    if not ramal:
+                        raise ValueError("Não há ramal livre para reativar esse operador.")
+                conn.execute("UPDATE usuarios SET ativo = true, ramal = %s WHERE id = %s", (ramal, uid))
+                msg, detalhe = "Usuário reativado.", {"ramal": ramal}
+            elif acao == "excluir":
+                if proprio:
+                    raise ValueError("Você não pode excluir o seu próprio usuário.")
+                if historico_usuario(conn, uid, alvo["login"]):
+                    raise ValueError("Esse usuário já tem histórico no sistema: desative em vez de excluir.")
+                conn.execute("DELETE FROM usuarios WHERE id = %s", (uid,))
+            else:
+                raise HTTPException(status_code=400)
+    except ValueError as e:
+        return RedirectResponse(f"/usuarios/{uid}?" + _urlencode({"erro": str(e)}), status_code=303)
+    if acao == "excluir":
+        auditar(u["id"], "usuario_excluido", request, alvo=alvo["login"], perfil=alvo["perfil"])
+        return RedirectResponse("/usuarios", status_code=303)
+    if acao == "senha":
+        auditar(u["id"], "usuario_senha", request, alvo=alvo["login"])
+        return tela_usuario(request, u, alvo, ok="Senha redefinida.", senha_gerada=senha if gerada else None)
+    auditar(u["id"], f"usuario_{acao}", request, alvo=alvo["login"], **detalhe)
+    return RedirectResponse(f"/usuarios/{uid}?" + _urlencode({"ok": msg}), status_code=303)
+
+
 # modulos ainda nao construidos: so verifica a permissao e mostra "em construcao"
 @app.get("/{modulo}", response_class=HTMLResponse)
 def em_construcao(request: Request, modulo: str):

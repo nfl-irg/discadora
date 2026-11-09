@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block titulo %}Usuários{% endblock %}
+{% block conteudo %}
+<style>
+  .topo { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 16px; }
+  .topo h2 { margin: 0; font-size: 1.6em; }
+  .topo a { margin-left: auto; }
+  .filtros { display: grid; grid-template-columns: 2fr repeat(2, minmax(150px, 1fr)); gap: 12px; align-items: end; }
+  @media (max-width: 700px) { .filtros { grid-template-columns: 1fr; } }
+  .filtros label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: var(--discreto); }
+  .rolar { overflow-x: auto; }
+  table.lista { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 760px; }
+  table.lista th { text-align: left; font-size: 12px; font-weight: 600; color: var(--discreto); padding: 10px; border-bottom: 1px solid var(--borda); }
+  table.lista td { padding: 12px 10px; border-bottom: 1px solid #eef0f3; }
+  table.lista td a { font-weight: 600; text-decoration: none; }
+  tr.inativo td { color: var(--discreto); }
+  .pill { padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap;
+          background: var(--azul-claro); color: var(--azul); }
+  .pill.inativo { background: #eff0f2; color: #5f6473; }
+  .pill.ativo { background: #e2f3e9; color: #1f6b3d; }
+</style>
+
+<div class="topo">
+  <h2>Usuários</h2>
+  <a href="/usuarios/novo"><button type="button">Novo usuário</button></a>
+</div>
+
+<div class="cartao">
+  <div class="filtros">
+    <label>Buscar por login ou nome <input id="f-busca" type="search"></label>
+    <label>Perfil
+      <select id="f-perfil"><option value="">Todos</option>
+        {% for chave, nome in perfis.items() %}<option value="{{ chave }}">{{ nome }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Situação
+      <select id="f-situacao"><option value="ativo">Ativos</option><option value="inativo">Inativos</option><option value="">Todos</option></select>
+    </label>
+  </div>
+</div>
+
+<div class="cartao">
+  <p class="discreto" id="contagem" style="margin-top:0"></p>
+  <div class="rolar">
+    <table class="lista">
+      <thead><tr><th>Login</th><th>Nome</th><th>Perfil</th><th>Ramal</th><th>Situação</th><th>Última atividade</th></tr></thead>
+      <tbody>
+      {% for a in usuarios %}
+        <tr class="{{ '' if a.ativo else 'inativo' }}" data-busca="{{ (a.login ~ ' ' ~ a.nome)|lower }}"
+            data-perfil="{{ a.perfil }}" data-situacao="{{ 'ativo' if a.ativo else 'inativo' }}">
+          <td><a href="/usuarios/{{ a.id }}">{{ a.login }}</a></td>
+          <td>{{ a.nome }}</td>
+          <td><span class="pill">{{ perfis.get(a.perfil, a.perfil) }}</span>{% if a.cliente %} <span class="discreto">· {{ a.cliente }}</span>{% endif %}</td>
+          <td>{{ a.ramal or '—' }}</td>
+          <td><span class="pill {{ 'ativo' if a.ativo else 'inativo' }}">{{ 'Ativo' if a.ativo else 'Inativo' }}</span></td>
+          <td class="discreto">{{ a.ultimo.strftime('%d/%m/%Y %H:%M') if a.ultimo else 'nunca' }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const linhas = [...document.querySelectorAll('tbody tr')];
+const fBusca = document.getElementById('f-busca'), fPerfil = document.getElementById('f-perfil'),
+      fSit = document.getElementById('f-situacao');
+function filtrar() {
+  const termo = fBusca.value.trim().toLowerCase();
+  let n = 0;
+  for (const l of linhas) {
+    const ok = (!termo || l.dataset.busca.includes(termo)) && (!fPerfil.value || l.dataset.perfil === fPerfil.value)
+            && (!fSit.value || l.dataset.situacao === fSit.value);
+    l.hidden = !ok; if (ok) n++;
+  }
+  document.getElementById('contagem').textContent = `${n} de ${linhas.length} usuários`;
+}
+fBusca.oninput = filtrar; fPerfil.onchange = filtrar; fSit.onchange = filtrar;
+filtrar();
+</script>
+{% endblock %}

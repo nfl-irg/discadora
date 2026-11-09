@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block titulo %}{{ alvo.login if alvo else 'Novo usuário' }}{% endblock %}
+{% block conteudo %}
+<style>
+  .campos-grade { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; align-items: end; }
+  .campos-grade label, .bloco label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: var(--discreto); }
+  .opcoes-senha { display: flex; flex-wrap: wrap; gap: 18px; margin: 4px 0 10px; }
+  .opcoes-senha label { display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 500; color: var(--texto); }
+  .senha-nova { background: var(--laranja-claro); border: 1px solid #f3b9a3; border-radius: 12px; padding: 16px 20px; margin-bottom: 16px; }
+  .senha-nova b.mono { font-size: 1.6em; letter-spacing: .06em; color: var(--texto); }
+  .msg-ok { color: #1f6b3d; font-weight: 600; }
+  .sec { background: #fff; color: var(--azul); }
+  .sec:hover { background: var(--azul-claro); }
+  .perigo { background: #fff; color: #9c221b; border-color: #e2b9b5; }
+  .perigo:hover { background: #fbe4e2; }
+  h3 { margin: 0 0 12px; }
+  .info { font-size: 14px; color: var(--discreto); margin: 4px 0 0; }
+</style>
+
+<p><a href="/usuarios">← Usuários</a></p>
+<h2>{{ alvo.login if alvo else 'Novo usuário' }}</h2>
+{% if alvo %}
+<p class="info">{{ perfis.get(alvo.perfil, alvo.perfil) }}{% if alvo.ramal %} · ramal {{ alvo.ramal }}{% endif %}
+  · {{ 'ativo' if alvo.ativo else 'inativo' }} · criado em {{ alvo.criado_em.strftime('%d/%m/%Y') }}
+  · última atividade {{ alvo.ultimo.strftime('%d/%m/%Y %H:%M') if alvo.ultimo else 'nunca' }}</p>
+{% endif %}
+
+{% if erro %}<p class="erro">{{ erro }}</p>{% endif %}
+{% if ok %}<p class="msg-ok">{{ ok }}</p>{% endif %}
+
+{% if senha_gerada %}
+<div class="senha-nova" role="status">
+  <p style="margin:0 0 6px">Senha de <b>{{ alvo.login }}</b>:</p>
+  <b class="mono">{{ senha_gerada }}</b>
+  <p class="discreto" style="margin:8px 0 0">Anote e repasse agora: ela não aparece de novo. Se perder, gere outra.</p>
+</div>
+{% endif %}
+
+{% set dados = form if not alvo else alvo %}
+<form class="cartao" method="post" action="{{ '/usuarios/' ~ alvo.id if alvo else '/usuarios/novo' }}">
+  <h3>Dados</h3>
+  <input type="hidden" name="acao" value="salvar">
+  <div class="campos-grade">
+    <label>Login
+      <input name="login" value="{{ dados.get('login', '') }}" {% if alvo %}readonly{% else %}required autocapitalize="off" placeholder="irg21"{% endif %}>
+    </label>
+    <label>Nome <input name="nome" value="{{ dados.get('nome', '') }}" required></label>
+    <label>Perfil
+      <select name="perfil" id="perfil" required>
+        {% for chave, nome in perfis.items() %}
+        <option value="{{ chave }}" {% if dados.get('perfil', 'operador') == chave %}selected{% endif %}>{{ nome }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label id="campo-cliente">Cliente
+      <select name="cliente_id">
+        <option value="">Escolha…</option>
+        {% for c in clientes %}<option value="{{ c.id }}" {% if dados.get('cliente_id')|string == c.id|string %}selected{% endif %}>{{ c.nome }}</option>{% endfor %}
+      </select>
+    </label>
+  </div>
+  {% if not alvo %}
+  <h3 style="margin-top:18px">Senha inicial</h3>
+  <div class="opcoes-senha">
+    <label><input type="radio" name="modo_senha" value="gerar" checked> Gerar automaticamente</label>
+    <label><input type="radio" name="modo_senha" value="definir"> Definir agora</label>
+  </div>
+  <div class="bloco campo-senha" style="max-width:280px"><label>Senha (mínimo 6 caracteres) <input type="password" name="senha" autocomplete="new-password"></label></div>
+  <p class="discreto">Operadores recebem um ramal livre automaticamente.</p>
+  <p><button>Criar usuário</button></p>
+  {% else %}
+  <p style="margin-top:16px"><button>Salvar dados</button></p>
+  {% endif %}
+</form>
+
+{% if alvo %}
+<form class="cartao" method="post" action="/usuarios/{{ alvo.id }}">
+  <h3>Senha</h3>
+  <input type="hidden" name="acao" value="senha">
+  <div class="opcoes-senha">
+    <label><input type="radio" name="modo_senha" value="gerar" checked> Gerar uma nova</label>
+    <label><input type="radio" name="modo_senha" value="definir"> Definir agora</label>
+  </div>
+  <div class="bloco campo-senha" style="max-width:280px"><label>Nova senha (mínimo 6 caracteres) <input type="password" name="senha" autocomplete="new-password"></label></div>
+  <p><button class="sec">Redefinir senha</button></p>
+</form>
+
+<form class="cartao" method="post" action="/usuarios/{{ alvo.id }}"
+      onsubmit="return {{ 'confirm(\'Desativar ' ~ alvo.login ~ '? O acesso é bloqueado na hora.\')' if alvo.ativo else 'true' }}">
+  <h3>Situação</h3>
+  {% if alvo.ativo %}
+  <input type="hidden" name="acao" value="desativar">
+  <p class="discreto">Desativar bloqueia o acesso na hora e libera o ramal. O histórico de ligações e da auditoria continua ligado ao usuário.</p>
+  <p><button class="perigo" {% if alvo.id == usuario.id %}disabled title="Você não pode desativar a si mesmo"{% endif %}>Desativar usuário</button></p>
+  {% else %}
+  <input type="hidden" name="acao" value="reativar">
+  <p class="discreto">Reativar devolve o acesso. Operadores recebem de volta o ramal antigo, se ele ainda estiver livre.</p>
+  <p><button>Reativar usuário</button></p>
+  {% endif %}
+</form>
+{% endif %}
+
+{% if alvo and alvo.id != usuario.id %}
+<form class="cartao" method="post" action="/usuarios/{{ alvo.id }}"
+      onsubmit="return confirm('Excluir {{ alvo.login }} de vez? Isso não pode ser desfeito.')">
+  <h3>Excluir</h3>
+  <input type="hidden" name="acao" value="excluir">
+  {% if pode_excluir %}
+  <p class="discreto">Este usuário nunca entrou no painel nem fez ligações, então pode ser excluído de vez.</p>
+  <p><button class="perigo">Excluir usuário</button></p>
+  {% else %}
+  <p class="discreto">Este usuário já tem histórico (acessos, ligações ou registros na auditoria) e, para preservá-lo,
+     não pode ser excluído. Desative-o: os inativos ficam fora da lista padrão.</p>
+  <p><button class="perigo" disabled>Excluir usuário</button></p>
+  {% endif %}
+</form>
+{% endif %}
+
+<script>
+  const perfil = document.getElementById('perfil'), campoCliente = document.getElementById('campo-cliente');
+  const mostrarCliente = () => { campoCliente.hidden = perfil.value !== 'cliente'; };
+  perfil.onchange = mostrarCliente; mostrarCliente();
+  for (const form of document.querySelectorAll('form')) {
+    const campo = form.querySelector('.campo-senha');
+    if (!campo) continue;
+    const atualizar = () => { campo.hidden = form.querySelector('input[name=modo_senha]:checked').value !== 'definir'; };
+    form.querySelectorAll('input[name=modo_senha]').forEach(r => r.onchange = atualizar);
+    atualizar();
+  }
+</script>
+{% endblock %}
