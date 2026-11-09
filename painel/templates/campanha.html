@@ -21,6 +21,18 @@
   pre { background: var(--azul); color: #e3e9f4; padding: 14px 16px; border-radius: 8px;
         max-height: 320px; overflow: auto; font-size: .82em; white-space: pre-wrap;
         font-family: "JetBrains Mono", ui-monospace, monospace; line-height: 1.6; }
+  .arquivos { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+  .arquivo { display: flex; align-items: center; gap: 14px; padding: 14px 16px; border: 1px solid var(--borda);
+             border-radius: 12px; background: #fff; color: var(--texto); text-decoration: none; }
+  .arquivo:hover { border-color: var(--azul); background: #f7f9fc; color: var(--texto); }
+  .arquivo .ic { flex: 0 0 auto; width: 42px; height: 42px; border-radius: 10px; display: flex; align-items: center;
+                 justify-content: center; background: var(--azul-claro); color: var(--azul); }
+  .arquivo:hover .ic { background: var(--azul); color: #fff; }
+  .arquivo .txt { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+  .arquivo .txt b { font-size: 14px; }
+  .arquivo .txt small { font-size: 12px; color: var(--discreto); line-height: 1.35; }
+  .arquivo .fmt { font-size: 11px; font-weight: 700; letter-spacing: .05em; padding: 3px 7px; border-radius: 6px;
+                  background: var(--laranja-claro); color: var(--laranja-texto); }
 </style>
 
 <p><a href="/campanhas">← Campanhas</a></p>
@@ -86,11 +98,25 @@
 
 <div class="cartao">
   <h3>Arquivos</h3>
-  <p><a href="/campanhas/{{ c.id }}/relatorio">Relatório de retorno (CSV)</a></p>
-  {% if c.tipo == 'ura' %}
-  <p><a href="/campanhas/{{ c.id }}/exportar-ura?arquivo=relatorio&todos=1">Relatório completo da URA (CSV)</a> ·
-     <a href="/campanhas/{{ c.id }}/exportar-ura?arquivo=pipeline">Arquivo para o pipeline f_ura (só finalizados)</a></p>
-  {% endif %}
+  <div class="arquivos">
+    <a class="arquivo" href="/campanhas/{{ c.id }}/relatorio">
+      <span class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"></path></svg></span>
+      <span class="txt"><b>Relatório de retorno</b><small>Uma linha por contato, com o resultado final de cada um</small></span>
+      <span class="fmt">CSV</span>
+    </a>
+    {% if c.tipo == 'ura' %}
+    <a class="arquivo" href="/campanhas/{{ c.id }}/exportar-ura?arquivo=relatorio&todos=1">
+      <span class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"></path></svg></span>
+      <span class="txt"><b>Relatório completo da URA</b><small>Todas as tentativas, com respostas, detecção e causas</small></span>
+      <span class="fmt">CSV</span>
+    </a>
+    <a class="arquivo" href="/campanhas/{{ c.id }}/exportar-ura?arquivo=pipeline">
+      <span class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"></path></svg></span>
+      <span class="txt"><b>Arquivo para o pipeline</b><small>Formato da f_ura, só com os contatos finalizados</small></span>
+      <span class="fmt">CSV</span>
+    </a>
+    {% endif %}
+  </div>
 </div>
 
 <div class="cartao">
