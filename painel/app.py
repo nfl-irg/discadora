@@ -732,6 +732,109 @@ async def salvar_configuracao(request: Request, cid: int):
     return RedirectResponse(f"/campanhas/{cid}", status_code=303)
 
 
+# ------------------------------ nova campanha: lista de cliente ------------------------------
+import uuid
+from fastapi import UploadFile, File
+import importar_lista, campanha_lista
+
+PASTA_UPLOADS = Path.home() / "lab" / "uploads"
+PASTA_UPLOADS.mkdir(exist_ok=True)
+
+
+def tela_lista(request, u, etapa, **contexto):
+    return templates.TemplateResponse(request, "nova_lista.html",
+                                      {"usuario": u, "etapa": etapa, "dias": DIAS, **contexto})
+
+
+@app.get("/campanhas/nova/lista", response_class=HTMLResponse)
+def nova_lista(request: Request):
+    u = usuario_atual(request, "campanhas")
+    return tela_lista(request, u, "arquivo")
+
+
+@app.post("/campanhas/nova/lista/arquivo", response_class=HTMLResponse)
+async def nova_lista_arquivo(request: Request, arquivo: UploadFile = File(...),
+                             cliente: str = Form(...), projeto: str = Form(...)):
+    u = usuario_atual(request, "campanhas")
+    if not (arquivo.filename or "").lower().endswith(".csv"):
+        return tela_lista(request, u, "erro", erro="O arquivo precisa ser .csv.")
+    token = uuid.uuid4().hex
+    destino = PASTA_UPLOADS / f"{token}.csv"
+    destino.write_bytes(await arquivo.read())
+    try:
+        colunas, linhas, codificacao, separador = importar_lista.ler_csv(destino)
+    except Exception as e:
+        destino.unlink(missing_ok=True)
+        return tela_lista(request, u, "erro", erro=f"Não consegui ler o arquivo: {e}")
+    # sugestoes automaticas pelo nome das colunas
+    sug_tel = [c for c in colunas if re.search(r"tel|fone|cel|phone", c, re.I)]
+    sug_uf = next((c for c in colunas if c.strip().lower() == "uf"), "")
+    sug_cidade = next((c for c in colunas
+                       if re.search(r"cidade|municipio|munic", c, re.I)), "")
+    return tela_lista(request, u, "colunas", token=token, nome_arquivo=arquivo.filename,
+                      cliente=cliente, projeto=projeto, colunas=colunas, amostra=linhas[:5],
+                      total=len(linhas), codificacao=codificacao, separador=separador,
+                      sug_tel=sug_tel, sug_uf=sug_uf, sug_cidade=sug_cidade)
+
+
+@app.post("/campanhas/nova/lista/importar", response_class=HTMLResponse)
+async def nova_lista_importar(request: Request):
+    u = usuario_atual(request, "campanhas")
+    f = await request.form()
+    token = f.get("token", "")
+    if not re.fullmatch(r"[0-9a-f]{32}", token):
+        raise HTTPException(status_code=400)
+    caminho = PASTA_UPLOADS / f"{token}.csv"
+    if not caminho.exists():
+        return tela_lista(request, u, "erro", erro="O arquivo expirou. Envie de novo.")
+    telefones = f.getlist("telefones")
+    if not telefones:
+        return tela_lista(request, u, "erro", erro="Marque pelo menos uma coluna de telefone.")
+
+    def rodar():
+        return importar_lista.importar(caminho, f["cliente"].strip(), f["projeto"].strip(),
+                                       telefones, nome=Path(f["nome_arquivo"]).stem,
+                                       uf=f.get("uf") or None, cidade=f.get("cidade") or None)
+    try:
+        resumo = await run_in_threadpool(rodar)
+    except SystemExit as e:
+        return tela_lista(request, u, "erro", erro=str(e))
+    caminho.unlink(missing_ok=True)          # os dados ja estao no banco: o arquivo sai do disco
+    auditar(u["id"], "lista_importada", request, lista=resumo["lista_id"],
+            linhas=resumo["linhas"], validos=resumo["validos"])
+    return tela_lista(request, u, "campanha", resumo=resumo, nome_arquivo=f["nome_arquivo"])
+
+
+@app.post("/campanhas/nova/lista/criar")
+async def nova_lista_criar(request: Request):
+    u = usuario_atual(request, "campanhas")
+    f = await request.form()
+    lista_id = int(f["lista_id"])
+    tipo = f.get("tipo", "call")
+    tentativas = int(f.get("tentativas") or 1)
+    if tipo not in ("call", "ura") or tentativas not in (1, 2, 3):
+        raise HTTPException(status_code=400)
+    quarentena = int(f["quarentena"]) if f.get("quarentena") else None
+
+    def criar():
+        r = campanha_lista.criar(lista_id, f["nome"].strip(), quarentena, tentativas)
+        with db() as conn:
+            conn.execute("""UPDATE campanhas
+                            SET tipo = %s, janela_inicio = %s, janela_fim = %s, max_canais = %s,
+                                dias_semana = %s, data_inicio = %s, data_fim = %s
+                            WHERE id = %s""",
+                         (tipo, f.get("janela_inicio") or "09:00", f.get("janela_fim") or "20:00",
+                          int(f["max_canais"]) if tipo == "ura" and f.get("max_canais") else None,
+                          dias_do_formulario(f), f.get("data_inicio") or None,
+                          f.get("data_fim") or None, r["campanha_id"]))
+        return r
+
+    r = await run_in_threadpool(criar)
+    auditar(u["id"], "campanha_criada", request, campanha=r["campanha_id"], origem="lista",
+            lista=lista_id, na_fila=r["na_fila"], em_quarentena=r["em_quarentena"])
+    return RedirectResponse(f"/campanhas/{r['campanha_id']}", status_code=303)
+
+
 # modulos ainda nao construidos: so verifica a permissao e mostra "em construcao"
 @app.get("/{modulo}", response_class=HTMLResponse)
 def em_construcao(request: Request, modulo: str):

@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+{% block titulo %}Nova campanha: lista de cliente{% endblock %}
+{% block conteudo %}
+<style>
+  .campos-grade { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; align-items: end; }
+  .campos-grade label { display: flex; flex-direction: column; gap: 4px; font-size: .85em; color: #555; }
+  .dias { display: flex; gap: 14px; flex-wrap: wrap; }
+  .dias label, label.check { display: flex; align-items: center; gap: 6px; }
+  .amostra { overflow-x: auto; }
+  .amostra table { border-collapse: collapse; font-size: .85em; }
+  .amostra th, .amostra td { padding: 6px 10px; border-bottom: 1px solid var(--borda); text-align: left; white-space: nowrap; }
+  .amostra th { background: #f0f1f6; }
+  .numeros { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; }
+  .numero { background: #f5f6fa; border-radius: 8px; padding: 12px; }
+  .numero b { display: block; font-size: 1.5em; }
+  .numero span { font-size: .85em; color: #555; }
+  h3 { margin: 18px 0 8px; }
+</style>
+<p><a href="/campanhas/nova">← Voltar</a></p>
+
+{% if etapa == 'erro' %}
+<div class="cartao">
+  <h2>Não foi possível continuar</h2>
+  <p class="erro">{{ erro }}</p>
+  <p><a href="/campanhas/nova/lista">Começar de novo</a></p>
+</div>
+
+{% elif etapa == 'arquivo' %}
+<div class="cartao">
+  <h2>Nova campanha de lista de cliente</h2>
+  <p class="discreto">Passo 1 de 3 · o arquivo</p>
+  <form method="post" action="/campanhas/nova/lista/arquivo" enctype="multipart/form-data" id="form">
+    <div class="campos-grade">
+      <label>Cliente <input name="cliente" required placeholder="Nome do cliente"></label>
+      <label>Projeto <input name="projeto" required placeholder="Pesquisa X"></label>
+      <label>Arquivo CSV <input type="file" name="arquivo" accept=".csv" required></label>
+    </div>
+    <p style="margin-top:16px"><button id="enviar">Enviar arquivo</button></p>
+  </form>
+</div>
+
+{% elif etapa == 'colunas' %}
+<div class="cartao">
+  <h2>{{ nome_arquivo }}</h2>
+  <p class="discreto">Passo 2 de 3 · as colunas ·
+     {{ total }} linhas · codificação {{ codificacao }} · separador "{{ separador }}"</p>
+  <h3>Primeiras linhas</h3>
+  <div class="amostra">
+    <table>
+      <tr>{% for col in colunas %}<th>{{ col }}</th>{% endfor %}</tr>
+      {% for linha in amostra %}
+      <tr>{% for col in colunas %}<td>{{ linha[col] }}</td>{% endfor %}</tr>
+      {% endfor %}
+    </table>
+  </div>
+  <form method="post" action="/campanhas/nova/lista/importar" id="form">
+    <input type="hidden" name="token" value="{{ token }}">
+    <input type="hidden" name="cliente" value="{{ cliente }}">
+    <input type="hidden" name="projeto" value="{{ projeto }}">
+    <input type="hidden" name="nome_arquivo" value="{{ nome_arquivo }}">
+    <h3>Colunas de telefone</h3>
+    <p class="dias">
+      {% for col in colunas %}
+      <label><input type="checkbox" name="telefones" value="{{ col }}" {% if col in sug_tel %}checked{% endif %}> {{ col }}</label>
+      {% endfor %}
+    </p>
+    <h3>Localização</h3>
+    <div class="campos-grade">
+      <label>Coluna da UF
+        <select name="uf"><option value="">(nenhuma)</option>
+          {% for col in colunas %}<option {% if col == sug_uf %}selected{% endif %}>{{ col }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Coluna da cidade
+        <select name="cidade"><option value="">(nenhuma)</option>
+          {% for col in colunas %}<option {% if col == sug_cidade %}selected{% endif %}>{{ col }}</option>{% endfor %}
+        </select>
+      </label>
+    </div>
+    <p style="margin-top:16px"><button id="enviar">Importar</button>
+       <span class="discreto">Normaliza os telefones, corrige as cidades e aplica a blocklist.</span></p>
+  </form>
+</div>
+
+{% elif etapa == 'campanha' %}
+<div class="cartao">
+  <h2>{{ nome_arquivo }} importado</h2>
+  <p class="discreto">Passo 3 de 3 · a campanha</p>
+  <div class="numeros">
+    <div class="numero"><b>{{ resumo.linhas }}</b><span>linhas no arquivo</span></div>
+    <div class="numero"><b>{{ resumo.validos }}</b><span>telefones válidos</span></div>
+    <div class="numero"><b>{{ resumo.invalidos }}</b><span>inválidos</span></div>
+    <div class="numero"><b>{{ resumo.duplicados }}</b><span>duplicados</span></div>
+    <div class="numero"><b>{{ resumo.bloqueados }}</b><span>bloqueados</span></div>
+    <div class="numero"><b>{{ resumo.sem_telefone }}</b><span>linhas sem telefone discável</span></div>
+  </div>
+  <p class="discreto">Todas as linhas ficam guardadas, inclusive as com problema: o relatório de retorno responde por cada uma.</p>
+
+  <form method="post" action="/campanhas/nova/lista/criar" id="form">
+    <input type="hidden" name="lista_id" value="{{ resumo.lista_id }}">
+    <h3>Identificação</h3>
+    <div class="campos-grade">
+      <label>Nome da campanha <input name="nome" required></label>
+      <label>Tipo
+        <select name="tipo" id="tipo"><option value="call">Operadores</option><option value="ura">URA</option></select>
+      </label>
+      <label id="campo-canais" hidden>Canais da URA <input name="max_canais" type="number" value="60" min="1"></label>
+    </div>
+    <h3>Ligações</h3>
+    <div class="campos-grade">
+      <label>Chamadas por contato <select name="tentativas"><option>1</option><option>2</option><option>3</option></select></label>
+      <label>Quarentena (dias) <input name="quarentena" type="number" min="1" placeholder="vazio = sem quarentena"></label>
+    </div>
+    <h3>Calendário</h3>
+    <p class="dias">
+      {% for n, nome in dias %}
+      <label><input type="checkbox" name="dias" value="{{ n }}" {% if n <= 6 %}checked{% endif %}> {{ nome }}</label>
+      {% endfor %}
+    </p>
+    <div class="campos-grade">
+      <label>Ligar das <input name="janela_inicio" type="time" value="09:00"></label>
+      <label>até <input name="janela_fim" type="time" value="20:00"></label>
+      <label>A partir de (data) <input name="data_inicio" type="date"></label>
+      <label>Até (data) <input name="data_fim" type="date"></label>
+    </div>
+    <p style="margin-top:16px"><button id="enviar">Criar campanha</button>
+       <span class="discreto">A campanha é criada parada.</span></p>
+  </form>
+</div>
+{% endif %}
+
+<script>
+  const form = document.getElementById('form');
+  if (form) form.onsubmit = () => { const b = document.getElementById('enviar'); b.disabled = true; b.textContent = 'Processando…'; };
+  const tipo = document.getElementById('tipo');
+  if (tipo) tipo.onchange = () => { document.getElementById('campo-canais').hidden = tipo.value !== 'ura'; };
+</script>
+{% endblock %}

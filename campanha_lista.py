@@ -6,13 +6,9 @@ DSN_DISCADORA = "dbname=discadora"
 DSN_MAILING = "host=192.168.56.1 dbname=db_mailing user=discadora_leitura"
 
 
-def main():
-    p = argparse.ArgumentParser(description="Cria campanha a partir de uma lista importada")
-    p.add_argument("--lista", type=int, required=True)
-    p.add_argument("--nome", required=True)
-    p.add_argument("--quarentena", type=int, help="dias; omita para nao aplicar")
-    p.add_argument("--tentativas", type=int, default=3)
-    a = p.parse_args()
+def criar(lista, nome, quarentena=None, tentativas=3):
+    """Cria a campanha a partir da lista e devolve o resumo."""
+    a = argparse.Namespace(lista=lista, nome=nome, quarentena=quarentena, tentativas=tentativas)
 
     with psycopg.connect(DSN_DISCADORA) as conn:
         with conn.cursor() as cur:
@@ -58,6 +54,18 @@ def main():
     print(f"  em quarentena      : {len(em_quarentena)}"
           + ("" if a.quarentena else " (quarentena nao aplicada)"))
     print(f"  na fila            : {na_fila}")
+    return {"campanha_id": campanha_id, "telefones": len(telefones),
+            "em_quarentena": len(em_quarentena), "na_fila": na_fila}
+
+
+def main():
+    p = argparse.ArgumentParser(description="Cria campanha a partir de uma lista importada")
+    p.add_argument("--lista", type=int, required=True)
+    p.add_argument("--nome", required=True)
+    p.add_argument("--quarentena", type=int, help="dias; omita para nao aplicar")
+    p.add_argument("--tentativas", type=int, default=3)
+    a = p.parse_args()
+    criar(a.lista, a.nome, a.quarentena, a.tentativas)
 
 
 if __name__ == "__main__":

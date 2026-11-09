@@ -46,17 +46,12 @@ def ler_csv(caminho):
     return leitor.fieldnames, list(leitor), codificacao, dialeto.delimiter
 
 
-def main():
-    p = argparse.ArgumentParser(description="Importa mailing CSV de cliente")
-    p.add_argument("arquivo")
-    p.add_argument("--cliente", required=True)
-    p.add_argument("--projeto", required=True)
-    p.add_argument("--nome", help="nome da lista (padrao: nome do arquivo)")
-    p.add_argument("--telefones", required=True,
-                   help="colunas de telefone separadas por virgula, ex.: tel1,tel2")
-    p.add_argument("--uf", help="coluna da UF")
-    p.add_argument("--cidade", help="coluna da cidade")
-    a = p.parse_args()
+def importar(arquivo, cliente, projeto, telefones, nome=None, uf=None, cidade=None):
+    """Importa o CSV e devolve o resumo (usado pelo painel e pela linha de comando)."""
+    if isinstance(telefones, (list, tuple)):
+        telefones = ",".join(telefones)
+    a = argparse.Namespace(arquivo=str(arquivo), cliente=cliente, projeto=projeto, nome=nome,
+                           telefones=telefones, uf=uf, cidade=cidade)
 
     colunas, linhas, codificacao, separador = ler_csv(a.arquivo)
     cols_tel = [c.strip() for c in a.telefones.split(",")]
@@ -141,6 +136,24 @@ def main():
     print(f"  duplicados               : {cont['duplicados']}")
     print(f"  bloqueados               : {cont['bloqueados']}")
     print(f"  linhas sem tel. discavel : {sem_telefone}")
+    return {"lista_id": lista_id, "linhas": len(registros), "validos": validos,
+            "invalidos": cont["invalidos"], "duplicados": cont["duplicados"],
+            "bloqueados": cont["bloqueados"], "sem_telefone": sem_telefone,
+            "codificacao": codificacao, "separador": separador}
+
+
+def main():
+    p = argparse.ArgumentParser(description="Importa mailing CSV de cliente")
+    p.add_argument("arquivo")
+    p.add_argument("--cliente", required=True)
+    p.add_argument("--projeto", required=True)
+    p.add_argument("--nome", help="nome da lista (padrao: nome do arquivo)")
+    p.add_argument("--telefones", required=True,
+                   help="colunas de telefone separadas por virgula, ex.: tel1,tel2")
+    p.add_argument("--uf", help="coluna da UF")
+    p.add_argument("--cidade", help="coluna da cidade")
+    a = p.parse_args()
+    importar(a.arquivo, a.cliente, a.projeto, a.telefones, a.nome, a.uf, a.cidade)
 
 
 if __name__ == "__main__":
