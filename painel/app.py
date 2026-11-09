@@ -835,6 +835,148 @@ async def nova_lista_criar(request: Request):
     return RedirectResponse(f"/campanhas/{r['campanha_id']}", status_code=303)
 
 
+# ------------------------------ roteiro da URA ------------------------------
+PASTA_SONS = Path("/var/lib/asterisk/sounds")
+AUDIOS_GERAIS = [("ura_abertura", "Abertura"), ("ura_invalida", "Opção inválida"),
+                 ("ura_encerramento", "Encerramento")]
+
+
+def converter_audio(cid, conteudo, nome_original):
+    """Converte WAV/MP3 para o formato de telefone e devolve o caminho usado pelo Asterisk."""
+    ext = Path(nome_original or "").suffix.lower()
+    if ext not in (".wav", ".mp3"):
+        raise ValueError("Envie o áudio em WAV ou MP3.")
+    pasta = PASTA_SONS / "ura" / f"c{cid}"
+    pasta.mkdir(parents=True, exist_ok=True)
+    nome = uuid.uuid4().hex[:12]
+    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+        tmp.write(conteudo)
+        origem = tmp.name
+    destino = pasta / f"{nome}.wav"
+    r = subprocess.run(["sox", origem, "-r", "8000", "-c", "1", "-b", "16", str(destino)],
+                       capture_output=True, text=True)
+    os.unlink(origem)
+    if r.returncode != 0:
+        raise ValueError("Não consegui converter o áudio: " + r.stderr.strip()[:200])
+    destino.chmod(0o664)
+    return f"ura/c{cid}/{nome}"
+
+
+def apagar_audio(caminho, cid):
+    """Apaga um audio antigo, mas so os da pasta desta campanha."""
+    if caminho and caminho.startswith(f"ura/c{cid}/"):
+        (PASTA_SONS / f"{caminho}.wav").unlink(missing_ok=True)
+
+
+@app.get("/campanhas/{cid:int}/roteiro", response_class=HTMLResponse)
+def roteiro(request: Request, cid: int, erro: str = "", ok: str = ""):
+    u = usuario_atual(request, "campanhas")
+    with db() as conn:
+        c = buscar_campanha(conn, cid)
+        if c["tipo"] != "ura":
+            raise HTTPException(status_code=400, detail="Só campanhas de URA têm roteiro")
+        perguntas = conn.execute("""SELECT ordem, audio, teclas_validas, timeout_s
+                                    FROM ura_perguntas WHERE campanha_id = %s ORDER BY ordem""",
+                                 (cid,)).fetchall()
+    motor = systemctl("is-active", servico(c)).stdout.strip()
+    return templates.TemplateResponse(request, "roteiro.html",
+        {"usuario": u, "c": c, "perguntas": perguntas, "gerais": AUDIOS_GERAIS,
+         "motor": motor, "erro": erro, "ok": ok})
+
+
+@app.post("/campanhas/{cid:int}/roteiro")
+async def salvar_roteiro(request: Request, cid: int):
+    u = usuario_atual(request, "campanhas")
+    f = await request.form()
+    acao = f.get("acao")
+    arquivo = f.get("arquivo")
+    conteudo = await arquivo.read() if getattr(arquivo, "filename", "") else None
+
+    def teclas_validas(v):
+        v = (v or "").strip()
+        if not re.fullmatch(r"[0-9*#]+", v):
+            raise ValueError("Teclas válidas: use só dígitos, * e #, por exemplo 123.")
+        return v
+
+    def tempo_espera(v):
+        n = int(v or 7)
+        if not 3 <= n <= 30:
+            raise ValueError("O tempo de espera deve ficar entre 3 e 30 segundos.")
+        return n
+
+    def executar():
+        with db() as conn:
+            c = buscar_campanha(conn, cid)
+            if c["tipo"] != "ura":
+                raise ValueError("Só campanhas de URA têm roteiro.")
+            if acao == "geral":
+                coluna = f.get("coluna")
+                if coluna not in dict(AUDIOS_GERAIS) or not conteudo:
+                    raise ValueError("Escolha um arquivo de áudio.")
+                novo = converter_audio(cid, conteudo, arquivo.filename)
+                apagar_audio(c[coluna], cid)
+                # a coluna vem de uma lista fixa (AUDIOS_GERAIS), nunca do texto do formulario
+                conn.execute(f"UPDATE campanhas SET {coluna} = %s WHERE id = %s", (novo, cid))
+                return "Áudio atualizado."
+            if acao == "nova":
+                n = conn.execute("SELECT count(*) AS n FROM ura_perguntas WHERE campanha_id = %s",
+                                 (cid,)).fetchone()["n"]
+                if n >= 12:
+                    raise ValueError("O limite é de 12 perguntas.")
+                if not conteudo:
+                    raise ValueError("Envie o áudio da pergunta.")
+                teclas, espera = teclas_validas(f.get("teclas")), tempo_espera(f.get("timeout"))
+                novo = converter_audio(cid, conteudo, arquivo.filename)
+                conn.execute("""INSERT INTO ura_perguntas
+                                  (campanha_id, ordem, audio, teclas_validas, timeout_s)
+                                VALUES (%s, %s, %s, %s, %s)""", (cid, n + 1, novo, teclas, espera))
+                return f"Pergunta {n + 1} adicionada."
+            if acao == "editar":
+                ordem = int(f["ordem"])
+                p = conn.execute("""SELECT audio FROM ura_perguntas
+                                    WHERE campanha_id = %s AND ordem = %s""", (cid, ordem)).fetchone()
+                if not p:
+                    raise ValueError("Pergunta não encontrada.")
+                teclas, espera = teclas_validas(f.get("teclas")), tempo_espera(f.get("timeout"))
+                audio = p["audio"]
+                if conteudo:
+                    audio = converter_audio(cid, conteudo, arquivo.filename)
+                    apagar_audio(p["audio"], cid)
+                conn.execute("""UPDATE ura_perguntas SET audio = %s, teclas_validas = %s, timeout_s = %s
+                                WHERE campanha_id = %s AND ordem = %s""",
+                             (audio, teclas, espera, cid, ordem))
+                return f"Pergunta {ordem} salva."
+            if acao == "remover":
+                p = conn.execute("""SELECT ordem, audio FROM ura_perguntas WHERE campanha_id = %s
+                                    ORDER BY ordem DESC LIMIT 1""", (cid,)).fetchone()
+                if not p:
+                    raise ValueError("Não há perguntas para remover.")
+                conn.execute("DELETE FROM ura_perguntas WHERE campanha_id = %s AND ordem = %s",
+                             (cid, p["ordem"]))
+                apagar_audio(p["audio"], cid)
+                return f"Pergunta {p['ordem']} removida."
+            raise ValueError("Ação desconhecida.")
+
+    try:
+        msg = await run_in_threadpool(executar)
+    except ValueError as e:
+        return RedirectResponse(f"/campanhas/{cid}/roteiro?" + urlencode({"erro": str(e)}),
+                                status_code=303)
+    auditar(u["id"], "roteiro_ura", request, campanha=cid, operacao=acao)
+    return RedirectResponse(f"/campanhas/{cid}/roteiro?" + urlencode({"ok": msg}), status_code=303)
+
+
+@app.get("/campanhas/{cid:int}/roteiro/audio")
+def ouvir_audio_roteiro(request: Request, cid: int, caminho: str):
+    usuario_atual(request, "campanhas")
+    if not re.fullmatch(r"ura/[A-Za-z0-9_/-]+", caminho) or ".." in caminho:
+        raise HTTPException(status_code=400)
+    arquivo = PASTA_SONS / f"{caminho}.wav"
+    if not arquivo.exists():
+        raise HTTPException(status_code=404)
+    return FileResponse(arquivo, media_type="audio/wav")
+
+
 # modulos ainda nao construidos: so verifica a permissao e mostra "em construcao"
 @app.get("/{modulo}", response_class=HTMLResponse)
 def em_construcao(request: Request, modulo: str):

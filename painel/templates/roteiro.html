@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block titulo %}Roteiro · {{ c.nome }}{% endblock %}
+{% block conteudo %}
+<style>
+  .audio-linha { display: grid; grid-template-columns: 150px 270px 1fr; gap: 12px; align-items: center;
+                 padding: 8px 0; border-bottom: 1px solid var(--borda); margin: 0; }
+  .perg { display: grid; grid-template-columns: 40px 270px 110px 90px 1fr auto; gap: 10px; align-items: center;
+          padding: 8px 0; border-bottom: 1px solid var(--borda); margin: 0; }
+  .perg input[type=text], .perg input[type=number] { width: 100%; }
+  audio { height: 32px; width: 260px; }
+  .sec { background: #fff; color: var(--azul); border: 1px solid var(--azul); }
+  .msg-ok { color: #1b6b34; }
+</style>
+<p><a href="/campanhas/{{ c.id }}">← {{ c.nome }}</a></p>
+
+<div class="cartao">
+  <h2>Roteiro da URA</h2>
+  {% if motor == 'active' %}
+  <p class="erro">A URA desta campanha está rodando. Ela lê o roteiro ao iniciar: as alterações valem a
+     partir do próximo início. Evite mudar perguntas no meio de uma campanha, para não misturar respostas
+     de roteiros diferentes.</p>
+  {% endif %}
+  {% if erro %}<p class="erro">{{ erro }}</p>{% endif %}
+  {% if ok %}<p class="msg-ok">{{ ok }}</p>{% endif %}
+  <p class="discreto">Envie os áudios em WAV ou MP3. Eles são convertidos para o formato de telefone
+     (8 kHz, mono), e o player toca a versão convertida, igual à que a pessoa vai ouvir.</p>
+</div>
+
+<div class="cartao">
+  <h3>Áudios gerais</h3>
+  {% for coluna, titulo in gerais %}
+  <form class="audio-linha" method="post" action="/campanhas/{{ c.id }}/roteiro" enctype="multipart/form-data">
+    <b>{{ titulo }}</b>
+    <span>
+      {% if c[coluna] %}
+      <audio controls preload="none" src="/campanhas/{{ c.id }}/roteiro/audio?caminho={{ c[coluna]|urlencode }}"></audio>
+      {% else %}<span class="discreto">sem áudio</span>{% endif %}
+    </span>
+    <span>
+      <input type="hidden" name="acao" value="geral">
+      <input type="hidden" name="coluna" value="{{ coluna }}">
+      <input type="file" name="arquivo" accept=".wav,.mp3" required>
+      <button>Enviar</button>
+    </span>
+  </form>
+  {% endfor %}
+</div>
+
+<div class="cartao">
+  <h3>Perguntas ({{ perguntas|length }} de 12)</h3>
+  <div class="perg discreto"><span>#</span><span>Áudio</span><span>Teclas válidas</span>
+       <span>Espera (s)</span><span>Trocar áudio</span><span></span></div>
+  {% for p in perguntas %}
+  <form class="perg" method="post" action="/campanhas/{{ c.id }}/roteiro" enctype="multipart/form-data">
+    <input type="hidden" name="acao" value="editar">
+    <input type="hidden" name="ordem" value="{{ p.ordem }}">
+    <b>P{{ p.ordem }}</b>
+    <audio controls preload="none" src="/campanhas/{{ c.id }}/roteiro/audio?caminho={{ p.audio|urlencode }}"></audio>
+    <input type="text" name="teclas" value="{{ p.teclas_validas }}" required>
+    <input type="number" name="timeout" value="{{ p.timeout_s }}" min="3" max="30">
+    <input type="file" name="arquivo" accept=".wav,.mp3">
+    <button>Salvar</button>
+  </form>
+  {% endfor %}
+  {% if perguntas %}
+  <form method="post" action="/campanhas/{{ c.id }}/roteiro" style="margin-top:12px"
+        onsubmit="return confirm('Remover a pergunta {{ perguntas|length }}?')">
+    <input type="hidden" name="acao" value="remover">
+    <button class="sec">Remover a última pergunta</button>
+  </form>
+  {% endif %}
+</div>
+
+{% if perguntas|length < 12 %}
+<div class="cartao">
+  <h3>Nova pergunta</h3>
+  <form class="perg" method="post" action="/campanhas/{{ c.id }}/roteiro" enctype="multipart/form-data">
+    <input type="hidden" name="acao" value="nova">
+    <b>P{{ perguntas|length + 1 }}</b>
+    <input type="file" name="arquivo" accept=".wav,.mp3" required>
+    <input type="text" name="teclas" value="12" required>
+    <input type="number" name="timeout" value="7" min="3" max="30">
+    <span></span>
+    <button>Adicionar</button>
+  </form>
+</div>
+{% endif %}
+{% endblock %}

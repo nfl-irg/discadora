@@ -28,6 +28,7 @@
   <div class="acoes">
     <button type="button" id="ver-ao-vivo" class="sec">Ligações em tempo real</button>
     <a href="/campanhas/{{ c.id }}/configurar"><button type="button" class="sec">Configurações</button></a>
+    {% if c.tipo == 'ura' %}<a href="/campanhas/{{ c.id }}/roteiro"><button type="button" class="sec">Roteiro da URA</button></a>{% endif %}
     {% if c.status != 'ativa' or motor != 'active' %}
     <form method="post" action="/campanhas/{{ c.id }}/acao"><input type="hidden" name="acao" value="iniciar">
       <button>{{ 'Retomar' if c.status == 'pausada' else 'Iniciar' }}</button></form>
